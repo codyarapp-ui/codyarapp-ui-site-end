@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Vazirmatn", "Vazir", "Tahoma", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Base style edits for smooth RTL with high contrast canvas */
+html, body {
+  font-family: var(--font-sans);
+  direction: rtl;
+  text-align: right;
+  background-color: #f1f5f9; /* Slate 100 for high visual contrast against white cards */
+  color: #0f172a; /* Slate 900 for max legibility */
+  scroll-behavior: smooth;
+  max-width: 100vw;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Crisp card shadows and distinct borders */
+.bg-white {
+  box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.08), 0 1px 2px -1px rgba(15, 23, 42, 0.05);
+}
+
+/* Strengthen light border contrast for mobile screen legibility */
+.border-slate-100 {
+  border-color: #e2e8f0 !important;
+}
+
+.border-slate-200 {
+  border-color: #cbd5e1 !important;
+}
+
+.border-slate-300 {
+  border-color: #94a3b8 !important;
+}
+
+/* High-contrast text readability enhancements */
+.text-slate-400 {
+  color: #64748b !important; /* Upgraded from faint slate-400 to readable slate-500 */
+}
+
+.text-slate-500 {
+  color: #475569 !important; /* Upgraded to slate-600 for sharp readability */
+}
+
+.text-slate-600 {
+  color: #334155 !important; /* Upgraded to slate-700 */
+}
+
+/* Input elements styling with clear borders and legible text */
+input, select, textarea {
+  transition: all 0.15s ease-in-out;
+  border-color: #cbd5e1;
+}
+
+/* Ensure dropdown options have high contrast white background and dark text across all browsers */
+option {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+input::placeholder, textarea::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2) !important;
+}
+
+/* Prevent Chrome autofill from forcing dark text on dark inputs */
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Custom premium scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+

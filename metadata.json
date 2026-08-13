@@ -1,0 +1,6 @@
+{
+  "name": "سامانه مدیریت کدیار۲۴",
+  "description": "سامانه مدیریت و خدمات فنی کدیار۲۴ - مدیریت تکنسین‌ها، سفارش‌ها و قطعات",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

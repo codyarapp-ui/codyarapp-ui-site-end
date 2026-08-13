@@ -1,0 +1,17 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # 1. Allow actual uploaded files to load directly
+  RewriteCond %{REQUEST_FILENAME} -f
+  RewriteRule ^uploads/(.*)$ uploads/$1 [L]
+
+  # 2. Rewrite all /api/* requests to api.php (exactly like root .htaccess)
+  RewriteRule ^api/(.*)$ api.php?_url=api/$1 [QSA,L]
+
+  # 3. React SPA Client-side Route Fallback
+  # If the folder or file does not exist, serve index.html directly
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . index.html [L]
+</IfModule>

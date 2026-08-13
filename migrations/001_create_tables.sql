@@ -1,0 +1,170 @@
+-- 001_create_tables.sql
+-- Create base schema for repair shop management system
+
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(255) PRIMARY KEY,
+  phone VARCHAR(20) NOT NULL,
+  full_name VARCHAR(255),
+  role VARCHAR(50) DEFAULT 'user',
+  password_hash VARCHAR(255),
+  wallet_balance DECIMAL(15, 2) DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_users_phone (phone)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS technicians (
+  id VARCHAR(255) PRIMARY KEY,
+  phone VARCHAR(20) NOT NULL,
+  full_name VARCHAR(255),
+  national_id VARCHAR(50),
+  city VARCHAR(100),
+  specialties TEXT,
+  avatar_url TEXT,
+  status VARCHAR(50) DEFAULT 'active',
+  wallet_balance DECIMAL(15, 2) DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_technicians_phone (phone)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS orders (
+  id VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(255),
+  technician_id VARCHAR(255),
+  category VARCHAR(100),
+  brand VARCHAR(100),
+  model VARCHAR(100),
+  problem_description TEXT,
+  customer_name VARCHAR(255),
+  customer_phone VARCHAR(20),
+  address TEXT,
+  city VARCHAR(100),
+  status VARCHAR(50) DEFAULT 'pending',
+  amount DECIMAL(15, 2) DEFAULT 0,
+  report TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_orders_technician FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS order_status_history (
+  id VARCHAR(255) PRIMARY KEY,
+  order_id VARCHAR(255) NOT NULL,
+  status VARCHAR(50) NOT NULL,
+  title TEXT,
+  updated_by VARCHAR(255),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_osh_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS spare_parts (
+  id VARCHAR(255) PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  category VARCHAR(100),
+  brand VARCHAR(100),
+  model VARCHAR(100),
+  price DECIMAL(15, 2) DEFAULT 0,
+  stock INT DEFAULT 0,
+  image_url TEXT,
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS part_orders (
+  id VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(255),
+  part_id VARCHAR(255),
+  quantity INT DEFAULT 1,
+  total_price DECIMAL(15, 2) DEFAULT 0,
+  status VARCHAR(50) DEFAULT 'pending',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_po_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_po_part FOREIGN KEY (part_id) REFERENCES spare_parts(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  plan_type VARCHAR(50),
+  start_date DATETIME,
+  end_date DATETIME,
+  status VARCHAR(50) DEFAULT 'active',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_sub_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS payments (
+  id VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(255),
+  order_id VARCHAR(255),
+  amount DECIMAL(15, 2) DEFAULT 0,
+  authority VARCHAR(255),
+  ref_id VARCHAR(255),
+  status VARCHAR(50) DEFAULT 'pending',
+  payment_method VARCHAR(50),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pay_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_pay_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+  id VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  type VARCHAR(50) NOT NULL,
+  amount DECIMAL(15, 2) NOT NULL,
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_wt_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS error_codes (
+  id VARCHAR(255) PRIMARY KEY,
+  code VARCHAR(100) NOT NULL,
+  brand VARCHAR(100) NOT NULL,
+  model VARCHAR(100) NOT NULL,
+  category VARCHAR(100) NOT NULL,
+  title VARCHAR(255),
+  description TEXT,
+  solution TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS tickets (
+  id VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  subject VARCHAR(255) NOT NULL,
+  status VARCHAR(50) DEFAULT 'open',
+  priority VARCHAR(50) DEFAULT 'normal',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_tick_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ticket_messages (
+  id VARCHAR(255) PRIMARY KEY,
+  ticket_id VARCHAR(255) NOT NULL,
+  sender_type VARCHAR(50) NOT NULL,
+  sender_id VARCHAR(255),
+  message TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_tm_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sms_logs (
+  id VARCHAR(255) PRIMARY KEY,
+  recipient_phone VARCHAR(20) NOT NULL,
+  message_text TEXT NOT NULL,
+  provider VARCHAR(50),
+  status VARCHAR(50),
+  response_data TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS settings (
+  setting_key VARCHAR(100) PRIMARY KEY,
+  setting_value LONGTEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
