@@ -1095,6 +1095,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newPartPrice, setNewPartPrice] = React.useState<number | ''>('');
   const [newPartPriceError, setNewPartPriceError] = React.useState('');
   const [newPartCategory, setNewPartCategory] = React.useState('');
+  const [newPartModel, setNewPartModel] = React.useState('');
   const [newPartBrands, setNewPartBrands] = React.useState<string[]>([]);
   const [newPartStock, setNewPartStock] = React.useState<number | ''>('');
   const [newPartStockError, setNewPartStockError] = React.useState('');
@@ -1249,19 +1250,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Affiliate Products states
   const [isAddAffiliateOpen, setIsAddAffiliateOpen] = React.useState(false);
+  const [newAffiliateTitle, setNewAffiliateTitle] = React.useState('');
   const [newAffiliateCategory, setNewAffiliateCategory] = React.useState('');
   const [newAffiliateBrand, setNewAffiliateBrand] = React.useState('');
   const [newAffiliateModel, setNewAffiliateModel] = React.useState('');
   const [newAffiliatePrice, setNewAffiliatePrice] = React.useState(0);
   const [newAffiliateLink, setNewAffiliateLink] = React.useState('');
+  const [newAffiliateImage, setNewAffiliateImage] = React.useState('');
   const [newAffiliateCommission, setNewAffiliateCommission] = React.useState(0);
 
   const [editingAffiliateId, setEditingAffiliateId] = React.useState<string | null>(null);
+  const [editAffiliateTitle, setEditAffiliateTitle] = React.useState('');
   const [editAffiliateCategory, setEditAffiliateCategory] = React.useState('');
   const [editAffiliateBrand, setEditAffiliateBrand] = React.useState('');
   const [editAffiliateModel, setEditAffiliateModel] = React.useState('');
   const [editAffiliatePrice, setEditAffiliatePrice] = React.useState(0);
   const [editAffiliateLink, setEditAffiliateLink] = React.useState('');
+  const [editAffiliateImage, setEditAffiliateImage] = React.useState('');
   const [editAffiliateCommission, setEditAffiliateCommission] = React.useState(0);
 
   const handleTechAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>, isEdit: boolean) => {
@@ -1383,14 +1388,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
+    const titleVal = newAffiliateTitle.trim() || `${newAffiliateBrand} ${newAffiliateModel} - ${newAffiliateCategory}`;
+    const imgVal = newAffiliateImage.trim() || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f1f5f9'/><text x='50' y='55' font-size='28' text-anchor='middle'>⚙️</text></svg>";
+
     const newProduct = {
       id: `aff_${Date.now()}`,
+      name: titleVal,
+      title: titleVal,
       category: newAffiliateCategory,
       brand: newAffiliateBrand,
       model: newAffiliateModel,
       price: Number(newAffiliatePrice) || 0,
       link: newAffiliateLink.trim(),
+      purchaseUrl: newAffiliateLink.trim(),
+      image: imgVal,
       commission: Number(newAffiliateCommission) || 0,
+      description: `قطعه همکار ${titleVal} برای ${newAffiliateBrand} مدل ${newAffiliateModel}`,
       created_at: new Date().toISOString()
     };
 
@@ -1399,6 +1412,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       onUpdateAffiliateProducts(updated);
       alert('محصول همکاری در فروش جدید با موفقیت ثبت شد!');
       // Reset form
+      setNewAffiliateTitle('');
+      setNewAffiliateImage('');
       setNewAffiliateCategory('');
       setNewAffiliateBrand('');
       setNewAffiliateModel('');
@@ -1416,17 +1431,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
+    const titleVal = editAffiliateTitle.trim() || `${editAffiliateBrand} ${editAffiliateModel} - ${editAffiliateCategory}`;
+
     if (onUpdateAffiliateProducts && editingAffiliateId) {
       const updated = (affiliateProducts || []).map(p => {
         if (p.id === editingAffiliateId) {
           return {
             ...p,
+            name: titleVal,
+            title: titleVal,
             category: editAffiliateCategory,
             brand: editAffiliateBrand,
             model: editAffiliateModel,
             price: Number(editAffiliatePrice) || 0,
             link: editAffiliateLink.trim(),
-            commission: Number(editAffiliateCommission) || 0
+            purchaseUrl: editAffiliateLink.trim(),
+            image: editAffiliateImage.trim() || p.image || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f1f5f9'/><text x='50' y='55' font-size='28' text-anchor='middle'>⚙️</text></svg>",
+            commission: Number(editAffiliateCommission) || 0,
+            description: `قطعه همکار ${titleVal} برای ${editAffiliateBrand} مدل ${editAffiliateModel}`
           };
         }
         return p;
@@ -1538,7 +1560,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       price: priceNum,
       image: finalImage,
       category: newPartCategory || 'سایر',
+      brand: newPartBrands.length > 0 ? newPartBrands[0] : 'عمومی',
       compatibility: newPartBrands.length > 0 ? newPartBrands : ['عمومی'],
+      model: newPartModel.trim() || 'همه مدل‌ها',
       stock: stockNum
     };
 
@@ -1552,6 +1576,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setNewPartPrice('');
       setNewPartPriceError('');
       setNewPartCategory('');
+      setNewPartModel('');
       setNewPartBrands([]);
       setNewPartStock('');
       setNewPartStockError('');
@@ -4629,7 +4654,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-slate-350 text-[10px] font-extrabold mb-1">قیمت کالا (تومان) *</label>
                     <input
@@ -4688,6 +4713,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     {newPartStockError && (
                       <p className="text-red-400 text-[10px] mt-1 text-right font-medium">{newPartStockError}</p>
                     )}
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-350 text-[10px] font-extrabold mb-1">مدل دستگاه (اختیاری)</label>
+                    <input
+                      type="text"
+                      value={newPartModel}
+                      onChange={(e) => setNewPartModel(e.target.value)}
+                      placeholder="مانند: ورونا پرلا ۲۴ یا همه مدل‌ها"
+                      className="w-full bg-white border border-slate-300 text-slate-900 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none text-right focus:border-blue-500 transition-all font-sans"
+                    />
                   </div>
                 </div>
 
@@ -7070,6 +7106,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <h4 className="text-xs font-extrabold text-white">ثبت محصول همکاری در فروش جدید</h4>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-bold">
+                <div>
+                  <label className="block text-slate-300 text-[10.5px] font-bold mb-1">نام قطعه / عنوان کالا *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="مانند: پمپ هیدرو کلیک پکیج، سنسور NTC، برد کنترل"
+                    value={newAffiliateTitle}
+                    onChange={(e) => setNewAffiliateTitle(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:border-blue-500 outline-none text-right font-sans"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 text-[10.5px] font-bold mb-1">آدرس آیکون یا تصویر کالا (اختیاری)</label>
+                  <input
+                    type="url"
+                    placeholder="لینک تصویر کالا یا رها کنید تا پیشفرض قرار گیرد"
+                    value={newAffiliateImage}
+                    onChange={(e) => setNewAffiliateImage(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:border-blue-500 outline-none text-left font-mono"
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-bold">
                 <div>
                   <label className="block text-slate-300 text-[10.5px] font-bold mb-1">دسته‌بندی محصول *</label>
@@ -7178,6 +7239,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
 
                 <form onSubmit={handleEditAffiliateProduct} className="space-y-4 text-xs font-bold">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-slate-300 text-[10.5px] font-bold mb-1">نام قطعه / عنوان کالا *</label>
+                      <input
+                        type="text"
+                        required
+                        value={editAffiliateTitle}
+                        onChange={(e) => setEditAffiliateTitle(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:border-blue-500 outline-none text-right font-sans"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 text-[10.5px] font-bold mb-1">آدرس آیکون یا تصویر کالا (اختیاری)</label>
+                      <input
+                        type="url"
+                        value={editAffiliateImage}
+                        onChange={(e) => setEditAffiliateImage(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:border-blue-500 outline-none text-left font-mono"
+                      />
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-slate-300 text-[10.5px] font-bold mb-1">دسته‌بندی محصول *</label>
@@ -7279,6 +7363,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <thead className="bg-slate-50 border-b border-slate-200 text-slate-800 text-[11px] font-black">
                   <tr>
                     <th className="p-3">ردیف</th>
+                    <th className="p-3">نام قطعه / کالا</th>
                     <th className="p-3">دسته‌بندی</th>
                     <th className="p-3">برند و مدل</th>
                     <th className="p-3">قیمت قطعه</th>
@@ -7291,13 +7376,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   {affiliateProducts.map((p, index) => (
                     <tr key={p.id} className="hover:bg-slate-50/50">
                       <td className="p-3 text-slate-400 font-mono">{index + 1}</td>
+                      <td className="p-3 font-extrabold text-slate-900">
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={p.image || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f1f5f9'/><text x='50' y='55' font-size='28' text-anchor='middle'>⚙️</text></svg>"}
+                            alt={p.name || p.title || p.brand}
+                            className="w-8 h-8 rounded-lg object-cover border border-slate-200 shrink-0 bg-slate-100"
+                          />
+                          <span>{p.name || p.title || `${p.brand} ${p.model}`}</span>
+                        </div>
+                      </td>
                       <td className="p-3 text-blue-700">{p.category}</td>
                       <td className="p-3 text-slate-800">{p.brand} | {p.model}</td>
                       <td className="p-3 text-emerald-700 font-mono">{p.price ? `${p.price.toLocaleString('fa-IR')} تومان` : 'نامشخص'}</td>
                       <td className="p-3 text-amber-600 font-mono">%{p.commission || 0}</td>
                       <td className="p-3">
                         <a
-                          href={p.link}
+                          href={p.link || p.purchaseUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-blue-600 hover:underline flex items-center gap-1 font-mono text-[11px]"
@@ -7309,11 +7404,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         <button
                           onClick={() => {
                             setEditingAffiliateId(p.id);
+                            setEditAffiliateTitle(p.title || p.name || '');
+                            setEditAffiliateImage(p.image || '');
                             setEditAffiliateCategory(p.category);
                             setEditAffiliateBrand(p.brand);
                             setEditAffiliateModel(p.model);
                             setEditAffiliatePrice(p.price || 0);
-                            setEditAffiliateLink(p.link || '');
+                            setEditAffiliateLink(p.link || p.purchaseUrl || '');
                             setEditAffiliateCommission(p.commission || 0);
                           }}
                           className="bg-amber-50 hover:bg-amber-600 text-amber-700 hover:text-white px-2.5 py-1 rounded-lg border border-amber-200 transition-all cursor-pointer text-[10px]"
@@ -7322,7 +7419,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         </button>
                         <button
                           onClick={() => {
-                            if (confirm(`آیا از حذف محصول همکاری در فروش "${p.brand} ${p.model}" اطمینان دارید؟`)) {
+                            if (confirm(`آیا از حذف محصول همکاری در فروش "${p.name || p.title || p.brand + ' ' + p.model}" اطمینان دارید؟`)) {
                               if (onUpdateAffiliateProducts) {
                                 const filtered = affiliateProducts.filter(x => x.id !== p.id);
                                 onUpdateAffiliateProducts(filtered);

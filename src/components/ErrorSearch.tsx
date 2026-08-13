@@ -2318,18 +2318,18 @@ export const ErrorSearch: React.FC<ErrorSearchProps> = ({
                                 <img
                                   referrerPolicy="no-referrer"
                                   src={aff.image || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f1f5f9'/><text x='50' y='55' font-size='28' text-anchor='middle'>⚙️</text></svg>"}
-                                  alt={aff.name}
+                                  alt={aff.name || aff.title || aff.brand}
                                   className="w-12 h-12 rounded-xl object-cover bg-slate-100 shrink-0 border border-purple-100"
                                 />
                                 <div className="flex-1 min-w-0 text-right">
-                                  <span className="font-extrabold text-xs text-slate-800 block truncate leading-snug">{aff.name}</span>
+                                  <span className="font-extrabold text-xs text-slate-800 block truncate leading-snug">{aff.name || aff.title || `${aff.brand} ${aff.model}`}</span>
                                   <div className="flex items-center gap-2 mt-1">
                                     <span className="text-[9.5px] text-purple-700 font-bold bg-purple-50 px-1.5 py-0.5 rounded">فروشگاه همکار (افیلیت)</span>
                                     <span className="text-[11px] text-purple-700 font-sans font-black">{aff.price ? Number(aff.price).toLocaleString('fa-IR') + ' تومان' : 'خرید آنلاين'}</span>
                                   </div>
                                 </div>
                                 <a
-                                  href={aff.link || '#'}
+                                  href={aff.purchaseUrl || aff.link || '#'}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="bg-purple-600 hover:bg-purple-700 active:scale-95 text-white text-[10px] font-black px-3 py-2 rounded-xl transition-all shadow-sm hover:shadow-md shrink-0 flex items-center gap-1"
@@ -3020,20 +3020,20 @@ export const ErrorSearch: React.FC<ErrorSearchProps> = ({
                         </span>
                       </div>
                       <h4 className="font-extrabold text-xs text-slate-900">
-                        {p.name}
+                        {p.name || p.title || `${p.brand} ${p.model}`}
                       </h4>
                       <p className="text-[10px] text-slate-500 line-clamp-2">
-                        {p.description}
+                        {p.description || `قطعه همکار مناسب دستگاه ${p.brand} مدل ${p.model}`}
                       </p>
                     </div>
 
                     <div className="flex justify-between items-center pt-2 border-t border-slate-200">
                       <span className="font-black text-xs text-blue-700 font-mono">
-                        {p.price?.toLocaleString('fa-IR')} تومان
+                        {p.price ? `${Number(p.price).toLocaleString('fa-IR')} تومان` : 'خرید آنلاین'}
                       </span>
-                      {p.purchaseUrl && (
+                      {(p.purchaseUrl || p.link) && (
                         <a
-                          href={p.purchaseUrl}
+                          href={p.purchaseUrl || p.link}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold px-3 py-1.5 rounded-xl cursor-pointer"
