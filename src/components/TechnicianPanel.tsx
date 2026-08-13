@@ -366,8 +366,15 @@ export const TechnicianPanel: React.FC<TechnicianPanelProps> = ({
 
   const [showAllLocations, setShowAllLocations] = React.useState(false);
 
-  const activeMyOrders = orders.filter((o) => o.technicianId === activeTech.id);
-  const rawAvailableOrders = orders.filter((o) => (!o.status || (o.status as string) === 'waiting' || (o.status as string) === 'pending' || o.status === 'registered' || (o.status as string) === 'new') && (!o.technicianId || o.technicianId === ''));
+  const isPendingStatus = (s?: string) => !s || s === 'registered' || s === 'pending' || s === 'waiting' || s === 'new';
+
+  const rawAvailableOrders = orders.filter((o) => 
+    isPendingStatus(o.status as string) && (!o.technicianId || o.technicianId === '' || o.technicianId === activeTech.id)
+  );
+
+  const activeMyOrders = orders.filter((o) => 
+    o.technicianId === activeTech.id && !isPendingStatus(o.status as string)
+  );
 
   const filteredAvailableOrders = rawAvailableOrders.filter((o) => {
     if (showAllLocations) return true;
@@ -649,13 +656,18 @@ export const TechnicianPanel: React.FC<TechnicianPanelProps> = ({
                       <span className="text-[9px] text-slate-400">ثبت: {new Date(ord.createdAt).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
 
-                    <div className="flex items-center gap-2 mb-2">
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
                       <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded">
                         {ord.category} ({ord.brand})
                       </span>
                       {ord.errorCode && (
                         <span className="bg-rose-50 text-rose-700 text-[10px] font-mono font-bold px-2 py-0.5 rounded">
                           کد خطا: {ord.errorCode}
+                        </span>
+                      )}
+                      {ord.technicianId === activeTech.id && (
+                        <span className="bg-amber-100 text-amber-900 text-[10px] font-extrabold px-2 py-0.5 rounded border border-amber-200">
+                          ⭐ درخواست اختصاصی مشتری
                         </span>
                       )}
                     </div>
@@ -731,8 +743,11 @@ export const TechnicianPanel: React.FC<TechnicianPanelProps> = ({
                           ? 'bg-orange-50 text-orange-700 border border-orange-200'
                           : ord.status === 'completed'
                           ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : isPendingStatus(ord.status as string)
+                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
                           : 'bg-slate-100 text-slate-600'
                       }`}>
+                        {isPendingStatus(ord.status as string) && 'در انتظار پذیرش'}
                         {ord.status === 'accepted' && 'پذیرفته شده'}
                         {ord.status === 'enroute' && 'در مسیر هماهنگی'}
                         {ord.status === 'repairing' && 'در حال انجام تعمیر'}
@@ -765,6 +780,17 @@ export const TechnicianPanel: React.FC<TechnicianPanelProps> = ({
                   {ord.status !== 'completed' && ord.status !== 'cancelled' && (
                     <div className="border-t border-slate-100 pt-3 flex flex-wrap gap-2 justify-between items-center">
                       <div className="flex flex-wrap gap-2">
+                        {isPendingStatus(ord.status as string) && (
+                          <button
+                            id={`accept-my-btn-${ord.id}`}
+                            onClick={() => onAcceptOrder(ord.id, activeTech.id)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-1.5 px-3.5 rounded-lg cursor-pointer transition-all flex items-center gap-1 shadow-xs"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>قبول مسئولیت و شروع</span>
+                          </button>
+                        )}
+
                         {ord.status === 'accepted' && (
                           <button
                             id={`enroute-btn-${ord.id}`}
