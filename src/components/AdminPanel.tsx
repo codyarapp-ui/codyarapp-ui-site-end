@@ -2642,20 +2642,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             let updatedCats = false, updatedBrands = false, updatedModels = false;
 
             const checkAndAddMetaData = (cat: string, bnd: string, mdl: string) => {
-              if (cat && !newCategories.includes(cat)) {
-                newCategories.push(cat);
+              const c = cat ? cat.trim() : '';
+              const b = bnd ? bnd.trim() : '';
+              const m = mdl ? mdl.trim() : '';
+              if (c && !newCategories.includes(c)) {
+                newCategories.push(c);
                 updatedCats = true;
               }
-              if (bnd && !newBrands.includes(bnd)) {
-                newBrands.push(bnd);
+              if (b && !newBrands.includes(b)) {
+                newBrands.push(b);
                 updatedBrands = true;
               }
-              if (mdl && mdl !== 'عمومی' && mdl !== 'کل مدل‌ها') {
-                const sm = mdl.trim();
-                if (sm && !newModels.includes(sm)) {
-                  newModels.push(sm);
-                  updatedModels = true;
-                }
+              if (m && m !== 'عمومی' && m !== 'کل مدل‌ها' && !newModels.includes(m)) {
+                newModels.push(m);
+                updatedModels = true;
               }
             };
 
@@ -2896,20 +2896,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             let updatedCats = false, updatedBrands = false, updatedModels = false;
 
             const checkAndAddMetaData = (cat: string, bnd: string, mdl: string) => {
-              if (cat && !newCategories.includes(cat)) {
-                newCategories.push(cat);
+              const c = cat ? cat.trim() : '';
+              const b = bnd ? bnd.trim() : '';
+              const m = mdl ? mdl.trim() : '';
+              if (c && !newCategories.includes(c)) {
+                newCategories.push(c);
                 updatedCats = true;
               }
-              if (bnd && !newBrands.includes(bnd)) {
-                newBrands.push(bnd);
+              if (b && !newBrands.includes(b)) {
+                newBrands.push(b);
                 updatedBrands = true;
               }
-              if (mdl && mdl !== 'عمومی' && mdl !== 'کل مدل‌ها') {
-                const sm = mdl.trim();
-                if (sm && !newModels.includes(sm)) {
-                  newModels.push(sm);
-                  updatedModels = true;
-                }
+              if (m && m !== 'عمومی' && m !== 'کل مدل‌ها' && !newModels.includes(m)) {
+                newModels.push(m);
+                updatedModels = true;
               }
             };
 
