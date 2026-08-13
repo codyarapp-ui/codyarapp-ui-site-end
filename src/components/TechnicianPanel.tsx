@@ -677,7 +677,7 @@ export const TechnicianPanel: React.FC<TechnicianPanelProps> = ({
                     <div className="space-y-1 text-slate-500 text-[11px] mb-3 leading-relaxed">
                       <div className="flex items-center gap-1">
                         <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                        <span>محله: {ord.city}، {ord.region}</span>
+                        <span>محله: {[ord.city, ord.region].filter(s => s && String(s).trim()).join('، ') || 'هماهنگی تلفنی'}</span>
                       </div>
                       <p className="bg-slate-50 p-2 rounded-xl text-slate-600 mt-1 lines-clamp-2 truncate max-h-[50px] overflow-hidden">
                         {ord.description || 'توضیحات ایراد فنی اضافه درج نشده است.'}
@@ -688,7 +688,9 @@ export const TechnicianPanel: React.FC<TechnicianPanelProps> = ({
                   <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
                     <div>
                       <span className="text-slate-455 text-[9px] block">زمان حضور پیشنهادی</span>
-                      <span className="text-slate-800 font-semibold text-[10px]">{ord.date} ({ord.timeSlot})</span>
+                      <span className="text-slate-800 font-semibold text-[10px]">
+                        {ord.date && !ord.date.includes('T') ? ord.date : 'هماهنگی با مشتری'} {ord.timeSlot ? `(${ord.timeSlot})` : ''}
+                      </span>
                     </div>
 
                     <button
@@ -764,7 +766,11 @@ export const TechnicianPanel: React.FC<TechnicianPanelProps> = ({
                       <div className="font-bold text-slate-700 mb-1">مشخصات متقاضی محلی:</div>
                       <p className="text-slate-600">نام: <span className="font-semibold text-slate-800">{ord.customerName}</span></p>
                       <p className="text-slate-600">تماس: <span className="font-semibold text-slate-800 font-sans">{ord.customerPhone}</span></p>
-                      <p className="text-slate-600">آدرس: <span className="font-sans text-slate-800 font-medium select-all">{ord.city}، {ord.region}، {ord.address}</span></p>
+                      <p className="text-slate-600">
+                        آدرس: <span className="font-sans text-slate-800 font-medium select-all">
+                          {[ord.city, ord.region, ord.address].filter(s => s && String(s).trim()).join('، ') || 'هماهنگی دقیق تلفنی با مشتری'}
+                        </span>
+                      </p>
                     </div>
 
                     <div className="space-y-1 bg-slate-50 p-3 rounded-xl flex flex-col justify-between">
@@ -772,7 +778,11 @@ export const TechnicianPanel: React.FC<TechnicianPanelProps> = ({
                         <div className="font-bold text-slate-700 mb-1">شرح ایراد فنی:</div>
                         <p className="text-justify leading-relaxed text-slate-600">{ord.description || 'توشیح اضافه ارائه نشده است.'}</p>
                       </div>
-                      <div className="mt-2 text-[10px] text-slate-400">بازه حضور: <span className="font-bold text-slate-700">{ord.date} ({ord.timeSlot})</span></div>
+                      <div className="mt-2 text-[10px] text-slate-400">
+                        بازه حضور: <span className="font-bold text-slate-700">
+                          {ord.date && !ord.date.includes('T') ? ord.date : 'هماهنگی با مشتری'} {ord.timeSlot ? `(${ord.timeSlot})` : ''}
+                        </span>
+                      </div>
                     </div>
                   </div>
 

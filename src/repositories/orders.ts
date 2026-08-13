@@ -1,6 +1,79 @@
 import { getDbPool, parseJsonColumn } from "../db/db";
 import { OrderStatusHistoryRepository } from "./order_status_history";
 
+function normalizePhoneDigits(rawPhone: string): string {
+  if (!rawPhone) return "";
+  let p = String(rawPhone).trim().replace(/\D/g, "");
+  if (p.startsWith("0098")) p = "0" + p.slice(4);
+  if (p.startsWith("98") && p.length > 10) p = "0" + p.slice(2);
+  if (p.length === 10 && p.startsWith("9")) p = "0" + p;
+  return p;
+}
+
+function parseAppOrderFields(orderData: any) {
+  const desc = String(orderData.problem_description || orderData.problemDescription || orderData.description || "");
+  let category = orderData.category || orderData.appliance || "";
+  let brand = orderData.brand || "";
+  let model = orderData.model || "";
+  let errorCode = orderData.error_code || orderData.errorCode || "";
+  let customerPhone = orderData.customer_phone || orderData.customerPhone || "";
+  let date = orderData.date || "";
+  let timeSlot = orderData.time_slot || orderData.timeSlot || "";
+  let address = orderData.address || "";
+
+  if (desc && (desc.includes("دستگاه") || desc.includes("خرابی") || desc.includes("مراجعه") || desc.includes("کد"))) {
+    // 1. Category extraction
+    const catMatch = desc.match(/دستگاه(?:\s*و\s*برند)?\s*:\s*([^ش\n\r]+?)(?=\s*(?:شرح خرابی|کد|زمان|تلفن|$))/);
+    if (catMatch && (!category || category === "خدمات عمومی" || category === "عمومی")) {
+      const extracted = catMatch[1].trim();
+      if (extracted) category = extracted;
+    }
+
+    // 2. Error code extraction
+    const errMatch = desc.match(/(?:کد\s*خطا|کد|ارور)\s*:?\s*([A-Za-z0-9\-_]+)/i);
+    if (errMatch && !errorCode) {
+      errorCode = errMatch[1].trim();
+    }
+
+    // 3. Preferred visit date/time extraction
+    const timeMatch = desc.match(/زمان(?:\s*پیشنهادی)?(?:\s*مراجعه\s*کارشناس)?\s*:\s*([^ت\n\r]+?)(?=\s*(?:تلفن|$))/);
+    if (timeMatch) {
+      const extractedTime = timeMatch[1].trim();
+      if (extractedTime && (!date || date.includes("T"))) {
+        date = extractedTime;
+      }
+    }
+
+    // 4. Phone extraction
+    const phoneMatch = desc.match(/(?:تلفن|تماس|موبایل)(?:\s*تماس)?(?:\s*هماهنگی)?\s*:\s*(0?9\d{9})/);
+    if (phoneMatch && (!customerPhone || customerPhone === "09120000000")) {
+      customerPhone = phoneMatch[1].trim();
+    }
+  }
+
+  // Safe keyword appliance classification if still generic
+  if ((!category || category === "خدمات عمومی" || category === "عمومی") && desc) {
+    if (desc.includes("لباسشویی")) category = "ماشین لباسشویی";
+    else if (desc.includes("ظرفشویی")) category = "ماشین ظرفشویی";
+    else if (desc.includes("پکیج")) category = "پکیج دیواری";
+    else if (desc.includes("یخچال")) category = "یخچال فریزر";
+    else if (desc.includes("کولر") || desc.includes("اسپلیت")) category = "کولر گازی";
+    else if (desc.includes("اجاق") || desc.includes("گاز")) category = "اجاق گاز";
+  }
+
+  return {
+    ...orderData,
+    category: category || "خدمات عمومی",
+    brand: brand || "",
+    model: model || "",
+    errorCode,
+    customerPhone: normalizePhoneDigits(customerPhone) || customerPhone,
+    date,
+    timeSlot,
+    address
+  };
+}
+
 function formatOrderRow(row: any): any {
   if (!row) return null;
   const mediaUrls = Array.isArray(row.media_urls) ? row.media_urls : parseJsonColumn(row.media_urls) || [];
@@ -9,15 +82,22 @@ function formatOrderRow(row: any): any {
     ...row,
     id: row.id,
     userId: row.user_id || row.userId || null,
+    user_id: row.user_id || row.userId || null,
     technicianId: row.technician_id || row.technicianId || null,
+    technician_id: row.technician_id || row.technicianId || null,
     customerName: row.customer_name || row.customerName || "",
+    customer_name: row.customer_name || row.customerName || "",
     customerPhone: row.customer_phone || row.customerPhone || "",
+    customer_phone: row.customer_phone || row.customerPhone || "",
     category: row.category || "",
+    appliance: row.category || row.appliance || "",
     brand: row.brand || "",
     model: row.model || "",
     errorCode: row.error_code || row.errorCode || "",
+    error_code: row.error_code || row.errorCode || "",
     description: row.problem_description || row.description || "",
     problem_description: row.problem_description || row.description || "",
+    problemDescription: row.problem_description || row.description || "",
     address: row.address || "",
     city: row.city || "",
     region: row.region || "",
@@ -25,11 +105,16 @@ function formatOrderRow(row: any): any {
     amount: Number(row.amount) || 0,
     report: row.report || "",
     technicianName: row.technician_name || row.technicianName || "",
+    technician_name: row.technician_name || row.technicianName || "",
     technicianPhone: row.technician_phone || row.technicianPhone || "",
+    technician_phone: row.technician_phone || row.technicianPhone || "",
     date: row.date || row.created_at || "",
     timeSlot: row.time_slot || row.timeSlot || "",
+    time_slot: row.time_slot || row.timeSlot || "",
     mediaUrls: Array.isArray(mediaUrls) ? mediaUrls : [],
-    createdAt: row.created_at || row.createdAt || new Date().toISOString()
+    media_urls: Array.isArray(mediaUrls) ? mediaUrls : [],
+    createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+    created_at: row.created_at || row.createdAt || new Date().toISOString()
   };
 }
 
@@ -74,7 +159,8 @@ export const OrderRepository = {
     return orders;
   },
 
-  async create(orderData: any): Promise<any> {
+  async create(rawOrderData: any): Promise<any> {
+    const orderData = parseAppOrderFields(rawOrderData || {});
     const id = orderData.id || `order_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const userId = orderData.user_id || orderData.userId || null;
     const techId = orderData.technician_id || orderData.technicianId || null;

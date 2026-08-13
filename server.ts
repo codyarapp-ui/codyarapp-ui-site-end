@@ -573,7 +573,16 @@ app.get("/api/general-problems/:id", async (req, res) => {
 
 app.get("/api/orders", async (req, res) => {
   try {
-    const orders = await OrderRepository.findAll();
+    let orders = await OrderRepository.findAll();
+    const queryPhone = normalizePhone((req.query.phone || req.query.customer_phone || req.query.customerPhone) as string);
+    const queryUserId = (req.query.user_id || req.query.userId) as string;
+
+    if (queryPhone) {
+      orders = orders.filter((o: any) => normalizePhone(o.customer_phone || o.customerPhone) === queryPhone);
+    } else if (queryUserId) {
+      orders = orders.filter((o: any) => String(o.user_id || o.userId) === String(queryUserId));
+    }
+
     return res.json({ status: "ok", orders, data: { orders } });
   } catch (err: any) {
     return res.json({ status: "ok", orders: [], data: { orders: [] } });
@@ -585,7 +594,14 @@ app.get("/api/orders/my-orders", async (req, res) => {
     const user = await getCurrentUserAsync(req);
     if (!user) return res.status(401).json({ status: "error", message: "احراز هویت نشده" });
     const all = await OrderRepository.findAll();
-    const mine = Array.isArray(all) ? all.filter((o: any) => o.user_id === user.id || o.userId === user.id) : [];
+    const cleanUserPhone = normalizePhone(user.phone);
+    const mine = Array.isArray(all) ? all.filter((o: any) => {
+      const cleanOrderPhone = normalizePhone(o.customer_phone || o.customerPhone);
+      return (
+        (user.id && (String(o.user_id) === String(user.id) || String(o.userId) === String(user.id))) ||
+        (cleanUserPhone && cleanOrderPhone && cleanUserPhone === cleanOrderPhone)
+      );
+    }) : [];
     return res.json({ status: "ok", orders: mine, data: mine });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });

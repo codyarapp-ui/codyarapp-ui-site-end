@@ -50,12 +50,20 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
     }
 
     // 2. Add local frontend state orders matching user phone or user ID
-    const myUserPhone = toEnglishNumber(currentUser.phone || '').replace(/[^\d]/g, '');
-    const cleanUserPhone9 = myUserPhone.startsWith('9') ? '0' + myUserPhone : myUserPhone;
+    const normalizeDigits = (p?: string) => {
+      if (!p) return '';
+      let str = toEnglishNumber(String(p)).replace(/[^\d]/g, '');
+      if (str.startsWith('0098')) str = '0' + str.slice(4);
+      if (str.startsWith('98') && str.length > 10) str = '0' + str.slice(2);
+      if (str.length === 10 && str.startsWith('9')) str = '0' + str;
+      return str;
+    };
+
+    const cleanUserPhone = normalizeDigits(currentUser.phone);
+
     orders.forEach((o: any) => {
-      const orderPhone = toEnglishNumber(o.customerPhone || o.customer_phone || '').replace(/[^\d]/g, '');
-      const cleanOrderPhone9 = orderPhone.startsWith('9') ? '0' + orderPhone : orderPhone;
-      const isSameUser = (cleanUserPhone9 && cleanUserPhone9 === cleanUserPhone9) ||
+      const cleanOrderPhone = normalizeDigits(o.customerPhone || o.customer_phone);
+      const isSameUser = (cleanUserPhone && cleanOrderPhone && cleanUserPhone === cleanOrderPhone) ||
         (o.userId && String(o.userId) === String(currentUser.id)) ||
         (o.user_id && String(o.user_id) === String(currentUser.id));
       if (isSameUser) {
