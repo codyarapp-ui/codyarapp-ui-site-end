@@ -3450,10 +3450,10 @@ export default function App() {
                 </div>
 
                 <ErrorSearch
-                  errorCodes={errorCodes.filter(c => c.isApproved)}
-                  commonProblems={commonProblems}
-                  spareParts={spareParts}
-                  affiliateProducts={affiliateProducts}
+                  errorCodes={(errorCodes || []).filter(c => c && c.isApproved)}
+                  commonProblems={commonProblems || []}
+                  spareParts={spareParts || []}
+                  affiliateProducts={affiliateProducts || []}
                   onSelectError={setSelectedError}
                   selectedError={selectedError}
                   onBookRepair={(err) => {
@@ -3475,8 +3475,8 @@ export default function App() {
                     }, 200);
                   }}
                   onPurchase={handlePurchasePart}
-                  categoryConfig={categoryConfig}
-                  technicians={technicians}
+                  categoryConfig={categoryConfig || {}}
+                  technicians={technicians || []}
                 />
               </div>
 

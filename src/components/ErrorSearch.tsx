@@ -218,9 +218,9 @@ interface ErrorSearchProps {
 }
 
 export const ErrorSearch: React.FC<ErrorSearchProps> = ({
-  errorCodes,
+  errorCodes = [],
   commonProblems = [],
-  spareParts,
+  spareParts = [],
   onSelectError: originalOnSelectError,
   selectedError,
   onBookRepair,
