@@ -15,3 +15,4 @@ export { SmsLogRepository } from "./sms_logs";
 export { SettingsRepository } from "./settings";
 export { SessionRepository } from "./sessions";
 export { UsageCounterRepository } from "./usage_counter";
+export { ActivityLogRepository } from "./activity_logs";

@@ -2,19 +2,27 @@ import { getDbPool } from "../db/db";
 
 function formatPaymentRow(row: any): any {
   if (!row) return null;
+  const isPart = row.related_type === 'part_purchase' || (row.related_id && !String(row.related_id).includes('month'));
   return {
     ...row,
     id: row.id,
     user_id: row.user_id,
     userId: row.user_id,
+    user_name: row.user_name || row.buyer_name || "",
+    userName: row.user_name || row.buyer_name || "",
+    user_phone: row.user_phone || row.buyer_phone || "",
+    userPhone: row.user_phone || row.buyer_phone || "",
+    user_role: row.user_role || "client",
+    userRole: row.user_role || "client",
     order_id: row.order_id,
-    related_type: row.related_type,
-    relatedType: row.related_type,
-    type: row.related_type,
+    related_type: isPart ? 'part_purchase' : 'subscription',
+    relatedType: isPart ? 'part_purchase' : 'subscription',
+    type: isPart ? 'part_purchase' : 'subscription',
     related_id: row.related_id,
     relatedId: row.related_id,
-    partId: row.related_type === 'part_purchase' ? row.related_id : undefined,
-    plan: row.related_type === 'subscription' ? row.related_id : undefined,
+    partId: isPart ? row.related_id : undefined,
+    partName: row.part_name || (isPart ? 'قطعه یدکی' : undefined),
+    plan: !isPart ? row.related_id : undefined,
     amount: Number(row.amount) || 0,
     price: Number(row.amount) || 0,
     authority: row.authority,
@@ -27,34 +35,80 @@ function formatPaymentRow(row: any): any {
     cardNumber: row.card_number,
     cardHolder: row.card_number,
     status: row.status,
-    payment_method: row.payment_method
+    payment_method: row.payment_method || 'card_to_card',
+    gateway: row.payment_method || 'card_to_card',
+    created_at: row.created_at
   };
 }
 
 export const PaymentRepository = {
   async findAll(): Promise<any[]> {
     const pool = getDbPool();
-    const [rows] = await pool.query("SELECT * FROM payments ORDER BY created_at DESC");
+    const [rows] = await pool.query(
+      `SELECT p.*, 
+              u.full_name as user_name, 
+              u.phone as user_phone, 
+              u.role as user_role,
+              sp.title as part_name
+       FROM payments p
+       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN spare_parts sp ON p.related_id = sp.id
+       ORDER BY p.created_at DESC`
+    );
     return (rows as any[]).map(formatPaymentRow);
   },
 
   async findById(id: string): Promise<any | null> {
     const pool = getDbPool();
-    const [rows] = await pool.query("SELECT * FROM payments WHERE id = ?", [id]);
+    const [rows] = await pool.query(
+      `SELECT p.*, 
+              u.full_name as user_name, 
+              u.phone as user_phone, 
+              u.role as user_role,
+              sp.title as part_name
+       FROM payments p
+       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN spare_parts sp ON p.related_id = sp.id
+       WHERE p.id = ?`,
+      [id]
+    );
     const arr = rows as any[];
     return arr.length > 0 ? formatPaymentRow(arr[0]) : null;
   },
 
   async findByAuthority(authority: string): Promise<any | null> {
     const pool = getDbPool();
-    const [rows] = await pool.query("SELECT * FROM payments WHERE authority = ?", [authority]);
+    const [rows] = await pool.query(
+      `SELECT p.*, 
+              u.full_name as user_name, 
+              u.phone as user_phone, 
+              u.role as user_role,
+              sp.title as part_name
+       FROM payments p
+       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN spare_parts sp ON p.related_id = sp.id
+       WHERE p.authority = ?`,
+      [authority]
+    );
     const arr = rows as any[];
     return arr.length > 0 ? formatPaymentRow(arr[0]) : null;
   },
 
   async findByUserId(userId: string): Promise<any[]> {
     const pool = getDbPool();
-    const [rows] = await pool.query("SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC", [userId]);
+    const [rows] = await pool.query(
+      `SELECT p.*, 
+              u.full_name as user_name, 
+              u.phone as user_phone, 
+              u.role as user_role,
+              sp.title as part_name
+       FROM payments p
+       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN spare_parts sp ON p.related_id = sp.id
+       WHERE p.user_id = ? 
+       ORDER BY p.created_at DESC`,
+      [userId]
+    );
     return (rows as any[]).map(formatPaymentRow);
   },
 

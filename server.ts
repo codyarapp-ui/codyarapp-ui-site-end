@@ -21,7 +21,8 @@ import {
   PaymentRepository,
   SubscriptionRepository,
   PartOrderRepository,
-  SmsLogRepository
+  SmsLogRepository,
+  ActivityLogRepository
 } from "./src/repositories";
 
 if (fs.existsSync("env")) {
@@ -34,6 +35,33 @@ const app = express();
 app.use(compression());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+// Activity Logger Helper to track all user actions into database
+async function logUserActivity(
+  req: express.Request,
+  action: string,
+  module: string = "general",
+  details: any = null,
+  targetUser: any = null
+) {
+  try {
+    const user = targetUser || (await getCurrentUserAsync(req).catch(() => null));
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "");
+    const userAgent = String(req.headers["user-agent"] || "");
+    await ActivityLogRepository.create({
+      user_id: user?.id || null,
+      user_name: user?.full_name || user?.name || "",
+      user_role: user?.role || "client",
+      action,
+      module,
+      ip,
+      user_agent: userAgent,
+      details
+    });
+  } catch (e) {
+    console.warn("[logUserActivity] error:", e);
+  }
+}
 
 // Directories setup
 const UPLOADS_DIR = path.join(process.cwd(), "public", "uploads");
@@ -197,6 +225,7 @@ app.post("/api/auth/login", async (req, res) => {
         }
       }
       const session = await issueSession(req, res, user.id);
+      await logUserActivity(req, "user_login", "auth", { phone }, user);
       return res.json({ status: "ok", user, ...session });
     }
     return res.status(404).json({ status: "error", message: "کاربری با این شماره یافت نشد" });
@@ -237,6 +266,7 @@ app.post("/api/auth/register", async (req, res) => {
     }
 
     const session = await issueSession(req, res, newUser.id);
+    await logUserActivity(req, "user_register", "auth", { phone: newUser.phone, role: newUser.role }, newUser);
     return res.json({ status: "ok", user: newUser, ...session });
   } catch (err: any) {
     console.error("[register] error:", err);
@@ -246,6 +276,7 @@ app.post("/api/auth/register", async (req, res) => {
 
 app.post("/api/auth/logout", async (req, res) => {
   try {
+    await logUserActivity(req, "user_logout", "auth");
     const cookieHeader = req.headers.cookie || "";
     const sessionMatch = cookieHeader.match(/session_user_id=([^; ]+)/);
     const tokenMatch = cookieHeader.match(/access_token=([^; ]+)/);
@@ -621,6 +652,7 @@ app.post(["/api/orders", "/api/repairs/create"], async (req, res) => {
       description: body.description || body.problem_description || ""
     };
     const created = await OrderRepository.create(orderPayload);
+    await logUserActivity(req, "repair_request_created", "orders", { orderId: created?.id, appliance: orderPayload.category });
     return res.json({ status: "ok", order: created, data: { order: created } });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
@@ -630,6 +662,7 @@ app.post(["/api/orders", "/api/repairs/create"], async (req, res) => {
 app.put("/api/orders/:id", async (req, res) => {
   try {
     const updated = await OrderRepository.update(req.params.id, req.body);
+    await logUserActivity(req, "repair_request_updated", "orders", { orderId: req.params.id, status: req.body?.status });
     return res.json({ status: "ok", order: updated });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
@@ -1396,8 +1429,13 @@ app.post("/api/server-backups/import-formatted-json", requireAdmin, async (req, 
   }
 });
 
-app.get("/api/admin/activity-logs", (req, res) => {
-  res.json([]);
+app.get("/api/admin/activity-logs", async (req, res) => {
+  try {
+    const logs = await ActivityLogRepository.findAll(300);
+    return res.json(logs);
+  } catch (err: any) {
+    return res.json([]);
+  }
 });
 
 app.get("/api/admin/error-logs", (req, res) => {
@@ -1429,6 +1467,7 @@ app.post("/api/tickets/create", async (req, res) => {
     const user = await getCurrentUserAsync(req);
     const userId = user?.id || req.body.userId || req.body.user_id || "";
     const ticket = await TicketRepository.create({ ...req.body, user_id: userId });
+    await logUserActivity(req, "ticket_created", "support", { ticketId: ticket?.id, subject: req.body?.subject });
     return res.json({ status: "ok", ticket });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
@@ -1507,34 +1546,106 @@ app.get("/api/subscriptions", async (req, res) => {
 app.post("/api/payment/card-verify", async (req, res) => {
   try {
     const user = await getCurrentUserAsync(req);
-    const { product_id, card_holder, track_number, amount, type } = req.body || {};
+    const {
+      product_id,
+      part_id,
+      part_name,
+      part_price,
+      quantity,
+      buyer_name,
+      buyer_phone,
+      address,
+      card_holder,
+      track_number,
+      amount,
+      type
+    } = req.body || {};
 
+    const targetPartId = part_id || product_id;
     const matchedPlan = SUBSCRIPTION_PLANS.find(p => p.id === product_id);
     const isSubscription = !!matchedPlan || type === "subscription" || (product_id && String(product_id).includes("month"));
 
-    const relatedType = isSubscription ? "subscription" : "part_purchase";
-    const paymentAmount = matchedPlan ? matchedPlan.price : (amount || 0);
+    if (isSubscription) {
+      const paymentAmount = matchedPlan ? matchedPlan.price : (amount || 0);
+      const newPayment = await PaymentRepository.create({
+        user_id: user?.id || null,
+        related_type: "subscription",
+        related_id: product_id || "1_month",
+        amount: paymentAmount,
+        payment_method: "card_to_card",
+        authority: `CARD_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        ref_id: track_number || "",
+        ref_code: track_number || "",
+        card_number: card_holder || "",
+        status: "pending"
+      });
 
-    const newPayment = await PaymentRepository.create({
-      user_id: user?.id || null,
-      related_type: relatedType,
-      related_id: product_id || null,
-      amount: paymentAmount,
-      payment_method: "card_to_card",
-      authority: `CARD_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      ref_id: track_number || "",
-      ref_code: track_number || "",
-      card_number: card_holder || "",
-      status: "pending"
-    });
+      await logUserActivity(req, "subscription_payment_submitted", "subscription", {
+        plan: product_id || "1_month",
+        amount: paymentAmount,
+        track_number
+      });
 
-    return res.json({
-      status: "ok",
-      message: isSubscription 
-        ? "فیش واریزی خرید اشتراک با موفقیت ثبت گردید و پس از تایید مدیریت فعال می‌شود." 
-        : "فیش واریزی خرید قطعه با موفقیت ثبت شد و در انتظار بررسی واحد مالی است.",
-      payment: newPayment
-    });
+      return res.json({
+        status: "ok",
+        message: "فیش واریزی خرید اشتراک با موفقیت ثبت گردید و پس از تایید مدیریت فعال می‌شود.",
+        payment: newPayment
+      });
+    } else {
+      // Part purchase payment - Create part order and payment atomically in database
+      let partItem = null;
+      if (targetPartId) {
+        partItem = await SparePartRepository.findById(targetPartId).catch(() => null);
+      }
+
+      const q = Math.max(1, Number(quantity) || 1);
+      const unitPrice = partItem ? Number(partItem.price) : (Number(part_price) || 0);
+      const totalAmt = Number(amount) || (unitPrice * q);
+      const partOrderId = `po_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+      const newPartOrder = await PartOrderRepository.create({
+        id: partOrderId,
+        user_id: user?.id || null,
+        part_id: targetPartId || null,
+        part_name: part_name || partItem?.title || "قطعه یدکی",
+        buyer_name: buyer_name || card_holder || user?.full_name || "مشتری",
+        buyer_phone: buyer_phone || user?.phone || "",
+        address: address || user?.city || "",
+        quantity: q,
+        total_price: totalAmt,
+        status: "pending",
+        shipping_tracking_code: track_number || ""
+      });
+
+      const newPayment = await PaymentRepository.create({
+        user_id: user?.id || null,
+        order_id: partOrderId,
+        related_type: "part_purchase",
+        related_id: targetPartId || null,
+        amount: totalAmt,
+        payment_method: "card_to_card",
+        authority: `CARD_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        ref_id: track_number || "",
+        ref_code: track_number || "",
+        card_number: card_holder || "",
+        status: "pending"
+      });
+
+      await logUserActivity(req, "part_purchase_payment_submitted", "store", {
+        partId: targetPartId,
+        partOrderId,
+        amount: totalAmt,
+        quantity: q,
+        track_number
+      });
+
+      return res.json({
+        status: "ok",
+        message: "فیش واریزی خرید قطعه با موفقیت ثبت شد و در انتظار بررسی واحد مالی است.",
+        payment: newPayment,
+        partOrder: newPartOrder
+      });
+    }
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -1560,6 +1671,12 @@ app.post("/api/payment/request", async (req, res) => {
       payment_method: "zarinpal",
       authority,
       status: "pending"
+    });
+
+    await logUserActivity(req, "payment_gateway_requested", "payment", {
+      relatedType,
+      amount: paymentAmount,
+      authority
     });
 
     return res.json({
@@ -1607,6 +1724,7 @@ app.post("/api/subscriptions/manual-add", requireAdmin, async (req, res) => {
       duration_days: durationDays || 30,
       status: "active"
     });
+    await logUserActivity(req, "subscription_manually_added", "admin", { userId, planId });
     return res.json({ status: "ok", subscription: created });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
@@ -1636,6 +1754,19 @@ app.post("/api/payments/:id/approve", requireAdmin, async (req, res) => {
         duration_days: durationDays,
         status: "active"
       });
+      await logUserActivity(req, "subscription_approved", "admin", { paymentId: payment.id, userId: payment.user_id });
+    } else if (payment.related_type === "part_purchase" || payment.partId) {
+      const pool = getDbPool();
+      if (payment.order_id) {
+        await pool.query("UPDATE part_orders SET status = 'paid' WHERE id = ?", [payment.order_id]);
+      } else if (payment.ref_id) {
+        await pool.query("UPDATE part_orders SET status = 'paid' WHERE shipping_tracking_code = ? OR user_id = ?", [payment.ref_id, payment.user_id]);
+      }
+      const partId = payment.related_id || payment.partId;
+      if (partId) {
+        await pool.query("UPDATE spare_parts SET stock = GREATEST(0, stock - 1) WHERE id = ?", [partId]).catch(() => {});
+      }
+      await logUserActivity(req, "part_purchase_approved", "admin", { paymentId: payment.id, partId });
     }
 
     return res.json({ status: "ok", message: "پرداخت با موفقیت تایید و اعمال شد", subscription: newSub });
@@ -1652,7 +1783,25 @@ app.post("/api/payments/:id/reject", requireAdmin, async (req, res) => {
     }
 
     await PaymentRepository.update(payment.id, { status: "failed" });
+    if (payment.related_type === "part_purchase" || payment.partId) {
+      const pool = getDbPool();
+      if (payment.order_id) {
+        await pool.query("UPDATE part_orders SET status = 'cancelled' WHERE id = ?", [payment.order_id]);
+      } else if (payment.ref_id) {
+        await pool.query("UPDATE part_orders SET status = 'cancelled' WHERE shipping_tracking_code = ?", [payment.ref_id]);
+      }
+    }
+    await logUserActivity(req, "payment_rejected", "admin", { paymentId: payment.id });
     return res.json({ status: "ok", message: "پرداخت رد شد" });
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+app.get("/api/activity-logs", requireAdmin, async (req, res) => {
+  try {
+    const logs = await ActivityLogRepository.findAll(300);
+    return res.json({ status: "ok", logs, data: { logs } });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }

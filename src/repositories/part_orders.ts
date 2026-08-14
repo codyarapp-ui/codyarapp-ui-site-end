@@ -44,20 +44,38 @@ function formatPartOrderRow(row: any): any {
 export const PartOrderRepository = {
   async findAll(): Promise<any[]> {
     const pool = getDbPool();
-    const [rows] = await pool.query("SELECT * FROM part_orders ORDER BY created_at DESC");
+    const [rows] = await pool.query(
+      `SELECT po.*, sp.title as part_name, sp.category as part_category 
+       FROM part_orders po 
+       LEFT JOIN spare_parts sp ON po.part_id = sp.id 
+       ORDER BY po.created_at DESC`
+    );
     return (rows as any[]).map(formatPartOrderRow);
   },
 
   async findById(id: string): Promise<any | null> {
     const pool = getDbPool();
-    const [rows] = await pool.query("SELECT * FROM part_orders WHERE id = ?", [id]);
+    const [rows] = await pool.query(
+      `SELECT po.*, sp.title as part_name, sp.category as part_category 
+       FROM part_orders po 
+       LEFT JOIN spare_parts sp ON po.part_id = sp.id 
+       WHERE po.id = ?`,
+      [id]
+    );
     const arr = rows as any[];
     return arr.length > 0 ? formatPartOrderRow(arr[0]) : null;
   },
 
   async findByUserId(userId: string): Promise<any[]> {
     const pool = getDbPool();
-    const [rows] = await pool.query("SELECT * FROM part_orders WHERE user_id = ? ORDER BY created_at DESC", [userId]);
+    const [rows] = await pool.query(
+      `SELECT po.*, sp.title as part_name, sp.category as part_category 
+       FROM part_orders po 
+       LEFT JOIN spare_parts sp ON po.part_id = sp.id 
+       WHERE po.user_id = ? 
+       ORDER BY po.created_at DESC`,
+      [userId]
+    );
     return (rows as any[]).map(formatPartOrderRow);
   },
 

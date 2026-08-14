@@ -964,16 +964,63 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
           "SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC",
           [u.id]
         );
-        u.payments = (payRows || []).map((pay: any) => ({
-          ...pay,
-          type: pay.related_type || (pay.related_id && String(pay.related_id).includes('month') ? 'subscription' : 'part_purchase'),
-          related_type: pay.related_type || (pay.related_id && String(pay.related_id).includes('month') ? 'subscription' : 'part_purchase'),
-          plan: pay.related_type === 'subscription' ? pay.related_id : undefined,
-          partId: pay.related_type === 'part_purchase' ? pay.related_id : undefined,
-          gateway: pay.payment_method || 'card_to_card'
+        u.payments = (payRows || []).map((pay: any) => {
+          const isSub = pay.related_type === 'subscription' || (pay.related_id && String(pay.related_id).includes('month'));
+          return {
+            ...pay,
+            type: isSub ? 'subscription' : 'part_purchase',
+            related_type: isSub ? 'subscription' : 'part_purchase',
+            plan: isSub ? pay.related_id : undefined,
+            partId: !isSub ? pay.related_id : undefined,
+            gateway: pay.payment_method || 'card_to_card'
+          };
+        });
+
+        // Load part orders for user
+        const [poRows]: any = await p.query(
+          `SELECT po.*, sp.title as part_name, sp.category as part_category 
+           FROM part_orders po 
+           LEFT JOIN spare_parts sp ON po.part_id = sp.id 
+           WHERE po.user_id = ? OR po.buyer_phone = ? 
+           ORDER BY po.created_at DESC`,
+          [u.id, u.phone || ""]
+        );
+        u.part_purchases = (poRows || []).map((po: any) => ({
+          id: po.id,
+          partId: po.part_id,
+          partName: po.part_name || "قطعه یدکی",
+          partCategory: po.part_category || "",
+          price: Number(po.total_price) || 0,
+          quantity: Number(po.quantity) || 1,
+          date: po.created_at ? new Intl.DateTimeFormat("fa-IR-u-nu-latn", { timeZone: "Asia/Tehran", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(po.created_at)) : "",
+          status: po.status === "completed" || po.status === "paid" ? "shipped" : po.status || "pending",
+          trackNumber: po.shipping_tracking_code || "",
+          postalTrackingCode: po.shipping_tracking_code || "",
+          customerName: po.buyer_name || u.full_name || "",
+          customerPhone: po.buyer_phone || u.phone || "",
+          customerAddress: po.address || ""
         }));
+        u.part_orders = u.part_purchases;
+
+        // Load repair orders for user
+        const [ordRows]: any = await p.query(
+          `SELECT * FROM orders WHERE user_id = ? OR customer_phone = ? ORDER BY created_at DESC`,
+          [u.id, u.phone || ""]
+        );
+        u.repair_requests = (ordRows || []).map((ord: any) => ({
+          id: ord.id,
+          appliance: ord.category || ord.appliance || "لوازم خانگی",
+          category: ord.category || "",
+          brand: ord.brand || "",
+          model: ord.model || "",
+          city: ord.city || u.city || "",
+          status: ord.status || "waiting",
+          date: ord.created_at ? new Intl.DateTimeFormat("fa-IR-u-nu-latn", { timeZone: "Asia/Tehran", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ord.created_at)) : "",
+          created_at: ord.created_at
+        }));
+        u.orders = u.repair_requests;
       } catch (e) {
-        console.warn("[getCurrentUserAsync] Sub/Pay fetch error:", e);
+        console.warn("[getCurrentUserAsync] Sub/Pay/Orders fetch error:", e);
       }
       return u;
     }
