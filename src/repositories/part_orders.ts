@@ -1,7 +1,23 @@
 import { getDbPool } from "../db/db";
 
+function toShamsiDate(dateInput: any): string {
+  try {
+    const d = dateInput ? new Date(dateInput) : new Date();
+    if (isNaN(d.getTime())) return "";
+    return new Intl.DateTimeFormat("fa-IR-u-nu-latn", {
+      timeZone: "Asia/Tehran",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(d);
+  } catch (e) {
+    return "";
+  }
+}
+
 function formatPartOrderRow(row: any): any {
   if (!row) return null;
+  const shamsi = toShamsiDate(row.created_at);
   return {
     ...row,
     id: row.id,
@@ -19,7 +35,9 @@ function formatPartOrderRow(row: any): any {
     status: row.status || "pending",
     shipping_tracking_code: row.shipping_tracking_code,
     trackNumber: row.shipping_tracking_code || "",
-    date: row.created_at ? new Date(row.created_at).toLocaleDateString('fa-IR') : new Date().toLocaleDateString('fa-IR')
+    date: shamsi || (row.created_at ? new Date(row.created_at).toLocaleDateString('fa-IR') : new Date().toLocaleDateString('fa-IR')),
+    shamsi_date: shamsi,
+    created_at_shamsi: shamsi
   };
 }
 

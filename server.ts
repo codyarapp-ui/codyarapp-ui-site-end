@@ -683,16 +683,29 @@ app.delete("/api/store/parts/:id", requireAdmin, async (req, res) => {
 
 app.get("/api/store/part-orders", async (req, res) => {
   try {
-    const partOrders = await PartOrderRepository.findAll();
-    return res.json({ status: "ok", partOrders, partPurchases: partOrders });
+    let partOrders = await PartOrderRepository.findAll();
+    const queryPhone = normalizePhone((req.query.phone || req.query.buyer_phone || req.query.customerPhone) as string);
+    if (queryPhone) {
+      partOrders = partOrders.filter((po: any) => normalizePhone(po.buyer_phone || po.customerPhone) === queryPhone);
+    }
+    return res.json({ status: "ok", partOrders, partPurchases: partOrders, data: partOrders });
   } catch (err: any) {
-    return res.json({ status: "ok", partOrders: [], partPurchases: [] });
+    return res.json({ status: "ok", partOrders: [], partPurchases: [], data: [] });
   }
 });
 
 app.get("/api/part-orders", async (req, res) => {
   try {
-    const partOrders = await PartOrderRepository.findAll();
+    let partOrders = await PartOrderRepository.findAll();
+    const queryPhone = normalizePhone((req.query.phone || req.query.buyer_phone || req.query.customerPhone) as string);
+    const queryUserId = (req.query.user_id || req.query.userId) as string;
+
+    if (queryPhone) {
+      partOrders = partOrders.filter((po: any) => normalizePhone(po.buyer_phone || po.customerPhone) === queryPhone);
+    } else if (queryUserId) {
+      partOrders = partOrders.filter((po: any) => String(po.user_id || po.userId) === String(queryUserId));
+    }
+
     return res.json({ status: "ok", partOrders, data: partOrders });
   } catch (err: any) {
     return res.json({ status: "ok", partOrders: [], data: [] });
@@ -704,10 +717,80 @@ app.get("/api/part-orders/my", async (req, res) => {
     const user = await getCurrentUserAsync(req);
     if (!user) return res.status(401).json({ status: "error", message: "احراز هویت نشده" });
     const all = await PartOrderRepository.findAll();
-    const mine = Array.isArray(all) ? all.filter((o: any) => o.user_id === user.id || o.userId === user.id) : [];
+    const cleanUserPhone = normalizePhone(user.phone);
+    const mine = Array.isArray(all) ? all.filter((o: any) => {
+      const cleanOrderPhone = normalizePhone(o.buyer_phone || o.customerPhone);
+      return (
+        (user.id && (String(o.user_id) === String(user.id) || String(o.userId) === String(user.id))) ||
+        (cleanUserPhone && cleanOrderPhone && cleanUserPhone === cleanOrderPhone)
+      );
+    }) : [];
     return res.json({ status: "ok", partOrders: mine, data: mine });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+app.post(["/api/store/order", "/api/part-orders", "/api/store/purchase"], async (req, res) => {
+  try {
+    const body = req.body || {};
+    const user = await getCurrentUserAsync(req);
+
+    const partId = body.part_id || body.partId || body.id;
+    const quantity = Math.max(1, Number(body.quantity) || 1);
+    const buyerName = body.buyer_name || body.customerName || user?.name || "مشتری فروشگاه";
+    const buyerPhone = normalizePhone(body.buyer_phone || body.customerPhone || user?.phone || "");
+    const address = body.address || body.customerAddress || "";
+    let totalPrice = Number(body.total_price || body.totalPrice || body.price || body.amount) || 0;
+
+    let partItem: any = null;
+    if (partId) {
+      partItem = await SparePartRepository.findById(partId).catch(() => null);
+    }
+
+    if (partItem) {
+      if (!totalPrice) {
+        totalPrice = (Number(partItem.price) || 0) * quantity;
+      }
+      // Check & deduct stock if available
+      if (typeof partItem.stock === "number" && partItem.stock >= quantity) {
+        await SparePartRepository.update(partId, { stock: Math.max(0, partItem.stock - quantity) }).catch(() => {});
+      }
+    }
+
+    const orderId = body.id || `po_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const status = body.status || "pending_payment";
+
+    const created = await PartOrderRepository.create({
+      id: orderId,
+      user_id: user?.id || body.user_id || body.userId || null,
+      part_id: partId || null,
+      part_name: body.part_name || body.partName || partItem?.title || partItem?.name || "قطعه یدکی",
+      buyer_name: buyerName,
+      buyer_phone: buyerPhone,
+      address,
+      quantity,
+      total_price: totalPrice,
+      status
+    });
+
+    const host = req.get("host") || "localhost:3000";
+    const proto = req.secure || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+    const paymentUrl = `${proto}://${host}/?checkout_type=part&order_id=${orderId}&amount=${totalPrice}`;
+
+    return res.status(201).json({
+      status: "ok",
+      success: true,
+      message: "سفارش خرید قطعه با موفقیت ثبت شد",
+      order: created,
+      partOrder: created,
+      order_id: orderId,
+      payment_url: paymentUrl,
+      paymentUrl
+    });
+  } catch (err: any) {
+    console.error("Part order error:", err);
+    return res.status(500).json({ status: "error", message: err.message || "خطا در ثبت سفارش قطعه" });
   }
 });
 

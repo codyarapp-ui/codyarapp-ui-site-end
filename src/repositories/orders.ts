@@ -1,6 +1,21 @@
 import { getDbPool, parseJsonColumn } from "../db/db";
 import { OrderStatusHistoryRepository } from "./order_status_history";
 
+function toShamsiDate(dateInput: any): string {
+  try {
+    const d = dateInput ? new Date(dateInput) : new Date();
+    if (isNaN(d.getTime())) return "";
+    return new Intl.DateTimeFormat("fa-IR-u-nu-latn", {
+      timeZone: "Asia/Tehran",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(d);
+  } catch (e) {
+    return "";
+  }
+}
+
 function normalizePhoneDigits(rawPhone: string): string {
   if (!rawPhone) return "";
   let p = String(rawPhone).trim().replace(/\D/g, "");
@@ -108,7 +123,9 @@ function formatOrderRow(row: any): any {
     technician_name: row.technician_name || row.technicianName || "",
     technicianPhone: row.technician_phone || row.technicianPhone || "",
     technician_phone: row.technician_phone || row.technicianPhone || "",
-    date: row.date || row.created_at || "",
+    date: row.date || toShamsiDate(row.created_at) || row.created_at || "",
+    shamsi_date: toShamsiDate(row.created_at),
+    created_at_shamsi: toShamsiDate(row.created_at),
     timeSlot: row.time_slot || row.timeSlot || "",
     time_slot: row.time_slot || row.timeSlot || "",
     mediaUrls: Array.isArray(mediaUrls) ? mediaUrls : [],
