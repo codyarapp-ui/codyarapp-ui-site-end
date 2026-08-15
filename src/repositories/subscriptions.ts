@@ -61,14 +61,20 @@ export const SubscriptionRepository = {
     return arr.length > 0 ? formatSubRow(arr[0]) : null;
   },
 
-  async findByUserId(userId: string): Promise<any[]> {
+  async findByUserId(userId: string, userPhone?: string): Promise<any[]> {
     const pool = getDbPool();
-    const [rows] = await pool.query("SELECT * FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC", [userId]);
+    const [rows] = await pool.query(
+      `SELECT * FROM subscriptions 
+       WHERE (user_id = ? AND ? != '') 
+          OR (user_id = ? AND ? != '') 
+       ORDER BY created_at DESC`,
+      [userId || "", userId || "", userPhone || "", userPhone || ""]
+    );
     return (rows as any[]).map(formatSubRow);
   },
 
-  async findActiveByUserId(userId: string): Promise<any | null> {
-    const all = await this.findByUserId(userId);
+  async findActiveByUserId(userId: string, userPhone?: string): Promise<any | null> {
+    const all = await this.findByUserId(userId, userPhone);
     const active = all
       .filter(s => (s.is_active || s.is_premium || s.status === 'active' || s.status === 'completed') && new Date(s.end_date) > new Date())
       .sort((a, b) => new Date(b.end_date).getTime() - new Date(a.end_date).getTime());
@@ -77,7 +83,16 @@ export const SubscriptionRepository = {
 
   async create(subData: any): Promise<any> {
     const id = subData.id || `sub_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const userId = subData.user_id || subData.userId || "";
+    const rawUserId = subData.user_id || subData.userId || "";
+
+    const pool = getDbPool();
+    let targetUserId = rawUserId;
+    if (rawUserId) {
+      const [uRows]: any = await pool.query("SELECT id, phone FROM users WHERE id = ? OR phone = ?", [rawUserId, rawUserId]);
+      if (uRows.length > 0) {
+        targetUserId = uRows[0].id;
+      }
+    }
 
     let planId = subData.plan_id || subData.planId || subData.plan || "1_month";
     let durationDays = Number(subData.duration_days || subData.durationDays) || 0;
@@ -106,7 +121,7 @@ export const SubscriptionRepository = {
     const status = subData.status || "active";
 
     // If user already has an active subscription, extend from its expiry date
-    const activeExisting = await this.findActiveByUserId(userId);
+    const activeExisting = await this.findActiveByUserId(targetUserId, rawUserId);
     let baseTime = new Date();
     if (activeExisting && new Date(activeExisting.end_date) > new Date()) {
       baseTime = new Date(activeExisting.end_date);
@@ -123,7 +138,6 @@ export const SubscriptionRepository = {
     const startDate = safeMySqlDate(subData.start_date || new Date());
     const price = Number(subData.price) || 0;
 
-    const pool = getDbPool();
     await pool.query(
       `INSERT INTO subscriptions (id, user_id, plan_name, plan_id, status, start_date, end_date, price)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -134,7 +148,7 @@ export const SubscriptionRepository = {
        start_date = VALUES(start_date),
        end_date = VALUES(end_date),
        price = VALUES(price)`,
-      [id, userId, planName, planId, status, startDate, endDate, price]
+      [id, targetUserId, planName, planId, status, startDate, endDate, price]
     );
 
     return (await SubscriptionRepository.findById(id));

@@ -66,15 +66,17 @@ export const PartOrderRepository = {
     return arr.length > 0 ? formatPartOrderRow(arr[0]) : null;
   },
 
-  async findByUserId(userId: string): Promise<any[]> {
+  async findByUserId(userId: string, userPhone?: string): Promise<any[]> {
     const pool = getDbPool();
     const [rows] = await pool.query(
       `SELECT po.*, sp.title as part_name, sp.category as part_category 
        FROM part_orders po 
        LEFT JOIN spare_parts sp ON po.part_id = sp.id 
-       WHERE po.user_id = ? 
+       WHERE (po.user_id = ? AND ? != '') 
+          OR (po.user_id = ? AND ? != '') 
+          OR (po.buyer_phone = ? AND ? != '')
        ORDER BY po.created_at DESC`,
-      [userId]
+      [userId || "", userId || "", userPhone || "", userPhone || "", userPhone || "", userPhone || ""]
     );
     return (rows as any[]).map(formatPartOrderRow);
   },
@@ -149,20 +151,28 @@ export const PartOrderRepository = {
       );
 
       await connection.commit();
-
-      const [poRows] = await pool.query("SELECT * FROM part_orders WHERE id = ?", [poId]);
-      const [payRows] = await pool.query("SELECT * FROM payments WHERE id = ?", [payId]);
-
-      return {
-        partOrder: (poRows as any[])[0],
-        payment: (payRows as any[])[0]
-      };
     } catch (err) {
-      await connection.rollback();
+      try {
+        await connection.rollback();
+      } catch (rbErr) {
+        console.warn("[createPurchaseTransaction] rollback error:", rbErr);
+      }
       throw err;
     } finally {
-      connection.release();
+      try {
+        connection.release();
+      } catch (relErr) {
+        console.warn("[createPurchaseTransaction] release error:", relErr);
+      }
     }
+
+    const [poRows] = await pool.query("SELECT * FROM part_orders WHERE id = ?", [poId]);
+    const [payRows] = await pool.query("SELECT * FROM payments WHERE id = ?", [payId]);
+
+    return {
+      partOrder: (poRows as any[])[0],
+      payment: (payRows as any[])[0]
+    };
   },
 
   async updateStatusTransaction(id: string, newStatus: string): Promise<any> {
@@ -190,13 +200,22 @@ export const PartOrderRepository = {
       );
 
       await connection.commit();
-      return (await PartOrderRepository.findById(id));
     } catch (err) {
-      await connection.rollback();
+      try {
+        await connection.rollback();
+      } catch (rbErr) {
+        console.warn("[updateStatusTransaction] rollback error:", rbErr);
+      }
       throw err;
     } finally {
-      connection.release();
+      try {
+        connection.release();
+      } catch (relErr) {
+        console.warn("[updateStatusTransaction] release error:", relErr);
+      }
     }
+
+    return (await PartOrderRepository.findById(id));
   },
 
   async update(id: string, updates: any): Promise<any | null> {

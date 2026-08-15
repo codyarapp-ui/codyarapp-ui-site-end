@@ -238,15 +238,18 @@ app.post("/api/auth/login", async (req, res) => {
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { phone, fullName, full_name, password, city, role, specialty, specialties, documents } = req.body || {};
+    // Security: Only allow technician or client role in public registration; never allow admin or is_super_admin
+    const allowedRole = role === "technician" ? "technician" : "client";
     const newUser = await UserRepository.create({
       phone,
       full_name: full_name || fullName || "",
       password_hash: password ? hashPassword(password) : "",
       city: city || "",
-      role: role || "client"
+      role: allowedRole,
+      is_super_admin: false
     });
 
-    if (role === "technician") {
+    if (allowedRole === "technician") {
       try {
         await TechnicianRepository.create({
           id: `tech_${newUser.id}`,
@@ -473,7 +476,16 @@ app.post("/api/auth/update-profile", async (req, res) => {
   try {
     const user = await getCurrentUserAsync(req);
     if (user && user.id) {
-      await UserRepository.update(user.id, req.body);
+      const updates = { ...(req.body || {}) };
+      // Security: Prevent normal users from altering role, superadmin status or password_hash via profile update
+      if (user.role !== "admin" && !user.is_super_admin) {
+        delete updates.role;
+        delete updates.is_super_admin;
+        delete updates.isSuperAdmin;
+        delete updates.password_hash;
+        delete updates.id;
+      }
+      await UserRepository.update(user.id, updates);
       return res.json({ status: "ok", message: "پروفایل بروزرسانی شد" });
     }
   } catch {}
@@ -554,7 +566,7 @@ app.get("/api/problems", async (req, res) => {
   }
 });
 
-app.post("/api/problems", async (req, res) => {
+app.post("/api/problems", requireAdmin, async (req, res) => {
   try {
     const created = await ProblemRepository.create(req.body);
     return res.json({ status: "ok", problem: created });
@@ -563,7 +575,7 @@ app.post("/api/problems", async (req, res) => {
   }
 });
 
-app.put("/api/problems/:id", async (req, res) => {
+app.put("/api/problems/:id", requireAdmin, async (req, res) => {
   try {
     const updated = await ProblemRepository.update(req.params.id, req.body);
     return res.json({ status: "ok", problem: updated });
@@ -687,7 +699,7 @@ app.get("/api/store/parts", async (req, res) => {
   }
 });
 
-app.post("/api/store/parts", async (req, res) => {
+app.post("/api/store/parts", requireAdmin, async (req, res) => {
   try {
     const created = await SparePartRepository.create(req.body);
     return res.json({ status: "ok", part: created, sparePart: created });
@@ -696,7 +708,7 @@ app.post("/api/store/parts", async (req, res) => {
   }
 });
 
-app.put("/api/store/parts/:id", async (req, res) => {
+app.put("/api/store/parts/:id", requireAdmin, async (req, res) => {
   try {
     const updated = await SparePartRepository.update(req.params.id, req.body);
     return res.json({ status: "ok", part: updated, sparePart: updated });
@@ -869,7 +881,7 @@ app.get("/api/technicians/:id", async (req, res) => {
   }
 });
 
-app.get("/api/admin/technicians", async (req, res) => {
+app.get("/api/admin/technicians", requireAdmin, async (req, res) => {
   try {
     const pool = getDbPool();
     const [techUsers]: any = await pool.query("SELECT * FROM users WHERE role = 'technician'");
@@ -1429,7 +1441,7 @@ app.post("/api/server-backups/import-formatted-json", requireAdmin, async (req, 
   }
 });
 
-app.get("/api/admin/activity-logs", async (req, res) => {
+app.get("/api/admin/activity-logs", requireAdmin, async (req, res) => {
   try {
     const logs = await ActivityLogRepository.findAll(300);
     return res.json(logs);
@@ -1438,7 +1450,7 @@ app.get("/api/admin/activity-logs", async (req, res) => {
   }
 });
 
-app.get("/api/admin/error-logs", (req, res) => {
+app.get("/api/admin/error-logs", requireAdmin, (req, res) => {
   res.json([]);
 });
 
@@ -1527,8 +1539,16 @@ app.get("/api/subscriptions/plans", (req, res) => {
 
 app.get("/api/payments", async (req, res) => {
   try {
-    const payments = await PaymentRepository.findAll();
-    return res.json({ status: "ok", payments });
+    const user = await getCurrentUserAsync(req).catch(() => null);
+    if (!user) {
+      return res.status(401).json({ status: "error", message: "احراز هویت نشده", payments: [] });
+    }
+    if (user.role === "admin" || user.is_super_admin) {
+      const payments = await PaymentRepository.findAll();
+      return res.json({ status: "ok", payments, data: payments });
+    }
+    const userPayments = await PaymentRepository.findByUserId(user.id, user.phone);
+    return res.json({ status: "ok", payments: userPayments, data: userPayments });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -1536,8 +1556,138 @@ app.get("/api/payments", async (req, res) => {
 
 app.get("/api/subscriptions", async (req, res) => {
   try {
-    const subscriptions = await SubscriptionRepository.findAll();
-    return res.json({ status: "ok", subscriptions });
+    const user = await getCurrentUserAsync(req).catch(() => null);
+    if (!user) {
+      return res.status(401).json({ status: "error", message: "احراز هویت نشده", subscriptions: [] });
+    }
+    if (user.role === "admin" || user.is_super_admin) {
+      const subscriptions = await SubscriptionRepository.findAll();
+      return res.json({ status: "ok", subscriptions, data: subscriptions });
+    }
+    const userSubs = await SubscriptionRepository.findByUserId(user.id, user.phone);
+    return res.json({ status: "ok", subscriptions: userSubs, data: userSubs });
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+// CafeBazaar In-App Purchase & Direct Subscription Activation API (App & Web synchronization)
+app.post([
+  "/api/payment/bazaar",
+  "/api/payment/bazaar-verify",
+  "/api/bazaar/verify",
+  "/api/bazaar/purchase",
+  "/api/subscriptions/bazaar",
+  "/api/subscriptions/activate"
+], async (req, res) => {
+  try {
+    const user = await getCurrentUserAsync(req).catch(() => null);
+    const {
+      purchase_token,
+      purchaseToken,
+      token,
+      order_id,
+      orderId,
+      package_name,
+      packageName,
+      product_id,
+      productId,
+      sku,
+      plan_id,
+      plan,
+      phone,
+      user_id,
+      userId,
+      amount,
+      price
+    } = req.body || {};
+
+    const targetUserId = user?.id || userId || user_id || null;
+    const targetPhone = user?.phone || phone || (targetUserId && String(targetUserId).startsWith("09") ? targetUserId : null);
+
+    const pool = getDbPool();
+    let dbUser: any = user;
+    if (!dbUser && (targetUserId || targetPhone)) {
+      const [uRows]: any = await pool.query(
+        "SELECT * FROM users WHERE (id = ? AND ? != '') OR (phone = ? AND ? != '')",
+        [targetUserId || "", targetUserId || "", targetPhone || "", targetPhone || ""]
+      );
+      if (uRows.length > 0) {
+        dbUser = uRows[0];
+      } else if (targetPhone) {
+        const newUserId = `usr_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        await pool.query(
+          "INSERT INTO users (id, phone, full_name, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE full_name = VALUES(full_name)",
+          [newUserId, targetPhone, "کاربر اپلیکیشن کدیار", "client"]
+        );
+        const [created]: any = await pool.query("SELECT * FROM users WHERE id = ? OR phone = ?", [newUserId, targetPhone]);
+        dbUser = created[0];
+      }
+    }
+
+    const effectiveUserId = dbUser?.id || targetUserId || `usr_bazaar_${Date.now()}`;
+    const effectivePhone = dbUser?.phone || targetPhone || "";
+
+    const rawPlanId = product_id || productId || sku || plan_id || plan || "1_month";
+    const matchedPlan = SUBSCRIPTION_PLANS.find(p => p.id === rawPlanId) || {
+      id: rawPlanId,
+      name: String(rawPlanId).includes("12") ? "اشتراک ۱۲ ماهه کدهای خطا" : String(rawPlanId).includes("6") ? "اشتراک ۶ ماهه کدهای خطا" : String(rawPlanId).includes("3") ? "اشتراک ۳ ماهه کدهای خطا" : "اشتراک ۱ ماهه کدهای خطا",
+      duration_days: String(rawPlanId).includes("12") ? 365 : String(rawPlanId).includes("6") ? 180 : String(rawPlanId).includes("3") ? 90 : 30,
+      price: Number(amount || price) || 0
+    };
+
+    const finalAmount = Number(amount || price) || matchedPlan.price;
+    const pToken = purchase_token || purchaseToken || token || order_id || orderId || `bazaar_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const pOrderId = order_id || orderId || pToken;
+
+    // 1. Record payment in DB
+    const payId = `pay_bazaar_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const payment = await PaymentRepository.create({
+      id: payId,
+      user_id: effectiveUserId,
+      related_type: "subscription",
+      related_id: matchedPlan.id,
+      amount: finalAmount,
+      payment_method: "cafebazaar",
+      authority: pToken,
+      ref_id: pOrderId,
+      ref_code: pToken,
+      status: "completed"
+    });
+
+    // 2. Immediately activate subscription in DB
+    const subscription = await SubscriptionRepository.create({
+      user_id: effectiveUserId,
+      plan_id: matchedPlan.id,
+      plan_name: matchedPlan.name,
+      price: finalAmount,
+      duration_days: matchedPlan.duration_days,
+      status: "active"
+    });
+
+    await logUserActivity(req, "bazaar_subscription_activated", "bazaar", {
+      userId: effectiveUserId,
+      userPhone: effectivePhone,
+      plan: matchedPlan.id,
+      amount: finalAmount,
+      purchaseToken: pToken
+    });
+
+    return res.json({
+      status: "ok",
+      success: true,
+      message: "اشتراک بازار با موفقیت فعال گردید.",
+      subscription,
+      payment,
+      is_active: true,
+      is_premium: true,
+      data: {
+        subscription,
+        payment,
+        is_active: true,
+        is_premium: true
+      }
+    });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -1545,7 +1695,7 @@ app.get("/api/subscriptions", async (req, res) => {
 
 app.post("/api/payment/card-verify", async (req, res) => {
   try {
-    const user = await getCurrentUserAsync(req);
+    const user = await getCurrentUserAsync(req).catch(() => null);
     const {
       product_id,
       part_id,
@@ -1558,17 +1708,30 @@ app.post("/api/payment/card-verify", async (req, res) => {
       card_holder,
       track_number,
       amount,
-      type
+      type,
+      user_id,
+      phone
     } = req.body || {};
+
+    const pool = getDbPool();
+    let effectiveUserId = user?.id || user_id || null;
+    const effectivePhone = user?.phone || buyer_phone || phone || null;
+
+    if (!effectiveUserId && effectivePhone) {
+      const [uRows]: any = await pool.query("SELECT id FROM users WHERE phone = ?", [effectivePhone]);
+      if (uRows.length > 0) {
+        effectiveUserId = uRows[0].id;
+      }
+    }
 
     const targetPartId = part_id || product_id;
     const matchedPlan = SUBSCRIPTION_PLANS.find(p => p.id === product_id);
     const isSubscription = !!matchedPlan || type === "subscription" || (product_id && String(product_id).includes("month"));
 
     if (isSubscription) {
-      const paymentAmount = matchedPlan ? matchedPlan.price : (amount || 0);
+      const paymentAmount = matchedPlan ? matchedPlan.price : (Number(amount) || 0);
       const newPayment = await PaymentRepository.create({
-        user_id: user?.id || null,
+        user_id: effectiveUserId,
         related_type: "subscription",
         related_id: product_id || "1_month",
         amount: paymentAmount,
@@ -1583,7 +1746,8 @@ app.post("/api/payment/card-verify", async (req, res) => {
       await logUserActivity(req, "subscription_payment_submitted", "subscription", {
         plan: product_id || "1_month",
         amount: paymentAmount,
-        track_number
+        track_number,
+        userId: effectiveUserId
       });
 
       return res.json({
@@ -1605,11 +1769,11 @@ app.post("/api/payment/card-verify", async (req, res) => {
 
       const newPartOrder = await PartOrderRepository.create({
         id: partOrderId,
-        user_id: user?.id || null,
+        user_id: effectiveUserId,
         part_id: targetPartId || null,
         part_name: part_name || partItem?.title || "قطعه یدکی",
         buyer_name: buyer_name || card_holder || user?.full_name || "مشتری",
-        buyer_phone: buyer_phone || user?.phone || "",
+        buyer_phone: buyer_phone || effectivePhone || "",
         address: address || user?.city || "",
         quantity: q,
         total_price: totalAmt,
@@ -1618,7 +1782,7 @@ app.post("/api/payment/card-verify", async (req, res) => {
       });
 
       const newPayment = await PaymentRepository.create({
-        user_id: user?.id || null,
+        user_id: effectiveUserId,
         order_id: partOrderId,
         related_type: "part_purchase",
         related_id: targetPartId || null,
@@ -1636,7 +1800,8 @@ app.post("/api/payment/card-verify", async (req, res) => {
         partOrderId,
         amount: totalAmt,
         quantity: q,
-        track_number
+        track_number,
+        userId: effectiveUserId
       });
 
       return res.json({
@@ -1692,12 +1857,23 @@ app.post("/api/payment/request", async (req, res) => {
 
 app.get("/api/subscriptions/me", async (req, res) => {
   try {
-    const user = await getCurrentUserAsync(req);
-    if (!user) {
-      return res.json({ status: "ok", subscription: null, is_active: false });
+    const user = await getCurrentUserAsync(req).catch(() => null);
+    const queryPhone = (req.query.phone || req.query.mobile) as string;
+    const queryUserId = (req.query.userId || req.query.user_id) as string;
+    const targetUserId = user?.id || queryUserId || "";
+    const targetPhone = user?.phone || queryPhone || "";
+
+    if (!targetUserId && !targetPhone) {
+      return res.json({ status: "ok", subscription: null, is_active: false, is_premium: false });
     }
-    const activeSub = await SubscriptionRepository.findActiveByUserId(user.id);
-    return res.json({ status: "ok", subscription: activeSub || null, is_active: !!activeSub });
+    const activeSub = await SubscriptionRepository.findActiveByUserId(targetUserId, targetPhone);
+    return res.json({
+      status: "ok",
+      subscription: activeSub || null,
+      is_active: !!activeSub,
+      is_premium: !!activeSub,
+      data: activeSub || null
+    });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -1705,10 +1881,23 @@ app.get("/api/subscriptions/me", async (req, res) => {
 
 app.get("/api/subscriptions/my-status", async (req, res) => {
   try {
-    const user = await getCurrentUserAsync(req);
-    if (!user) return res.json({ status: "ok", subscription: null, is_active: false });
-    const activeSub = await SubscriptionRepository.findActiveByUserId(user.id);
-    return res.json({ status: "ok", subscription: activeSub || null, is_active: !!activeSub, data: activeSub || null });
+    const user = await getCurrentUserAsync(req).catch(() => null);
+    const queryPhone = (req.query.phone || req.query.mobile) as string;
+    const queryUserId = (req.query.userId || req.query.user_id) as string;
+    const targetUserId = user?.id || queryUserId || "";
+    const targetPhone = user?.phone || queryPhone || "";
+
+    if (!targetUserId && !targetPhone) {
+      return res.json({ status: "ok", subscription: null, is_active: false, is_premium: false });
+    }
+    const activeSub = await SubscriptionRepository.findActiveByUserId(targetUserId, targetPhone);
+    return res.json({
+      status: "ok",
+      subscription: activeSub || null,
+      is_active: !!activeSub,
+      is_premium: !!activeSub,
+      data: activeSub || null
+    });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -1741,22 +1930,28 @@ app.post("/api/payments/:id/approve", requireAdmin, async (req, res) => {
     await PaymentRepository.update(payment.id, { status: "completed" });
 
     let newSub = null;
-    if (payment.related_type === "subscription" && payment.user_id) {
-      const matchedPlan = SUBSCRIPTION_PLANS.find(p => p.id === payment.related_id);
-      const durationDays = matchedPlan ? matchedPlan.duration_days : 30;
-      const planName = matchedPlan ? matchedPlan.name : "اشتراک ۱ ماهه کدهای خطا";
+    const pool = getDbPool();
+    if (payment.related_type === "subscription" || (payment.related_id && String(payment.related_id).includes("month"))) {
+      const planId = payment.related_id || "1_month";
+      const matchedPlan = SUBSCRIPTION_PLANS.find(p => p.id === planId);
+      const durationDays = matchedPlan ? matchedPlan.duration_days : (String(planId).includes("12") ? 365 : String(planId).includes("6") ? 180 : String(planId).includes("3") ? 90 : 30);
+      const planName = matchedPlan ? matchedPlan.name : "اشتراک ویژه کدهای خطا";
+
+      let targetUserId = payment.user_id;
+      if (!targetUserId && payment.user_phone) {
+        targetUserId = payment.user_phone;
+      }
 
       newSub = await SubscriptionRepository.create({
-        user_id: payment.user_id,
-        plan_id: payment.related_id || "1_month",
+        user_id: targetUserId || "usr_anonymous",
+        plan_id: planId,
         plan_name: planName,
         price: payment.amount,
         duration_days: durationDays,
         status: "active"
       });
-      await logUserActivity(req, "subscription_approved", "admin", { paymentId: payment.id, userId: payment.user_id });
+      await logUserActivity(req, "subscription_approved", "admin", { paymentId: payment.id, userId: targetUserId, planId });
     } else if (payment.related_type === "part_purchase" || payment.partId) {
-      const pool = getDbPool();
       if (payment.order_id) {
         await pool.query("UPDATE part_orders SET status = 'paid' WHERE id = ?", [payment.order_id]);
       } else if (payment.ref_id) {

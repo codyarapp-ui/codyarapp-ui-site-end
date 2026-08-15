@@ -2507,6 +2507,7 @@ export default function App() {
       completed_at: new Date().toISOString()
     };
 
+    // 1. If it's a part purchase
     if (payment.type === 'part_purchase' || payment.partId) {
       const updatedParts = spareParts.map(p =>
         p.id === payment.partId ? { ...p, stock: Math.max(0, p.stock - 1) } : p
@@ -2520,6 +2521,16 @@ export default function App() {
       setSpareParts(updatedParts);
       setPartPurchases(updatedPurchases);
       setPaymentsList(updatedPayments);
+
+      try {
+        const token = localStorage.getItem('session_user_id') || '';
+        await fetch(`/api/payments/${paymentId}/approve`, {
+          method: 'POST',
+          headers: { 'X-Session-Token': token }
+        });
+      } catch (e) {
+        console.warn("Backend part approve error:", e);
+      }
 
       const success = await syncWithBackend({
         payments: updatedPayments,
@@ -2542,6 +2553,7 @@ export default function App() {
       return;
     }
     
+    // 2. If it's a subscription purchase
     const plansList = [
       { id: "1_month", name: "اشتراک ۱ ماهه کدهای خطا", duration_days: 30 },
       { id: "3_month", name: "اشتراک ۳ ماهه کدهای خطا", duration_days: 90 },
@@ -2634,6 +2646,16 @@ export default function App() {
       ...payment,
       status: 'failed'
     };
+
+    try {
+      const token = localStorage.getItem('session_user_id') || '';
+      await fetch(`/api/payments/${paymentId}/reject`, {
+        method: 'POST',
+        headers: { 'X-Session-Token': token }
+      });
+    } catch (e) {
+      console.warn("Direct reject endpoint error:", e);
+    }
 
     if (payment.type === 'part_purchase') {
       const updatedPurchases = partPurchases.map(pp =>

@@ -46,12 +46,12 @@ export const PaymentRepository = {
     const pool = getDbPool();
     const [rows] = await pool.query(
       `SELECT p.*, 
-              u.full_name as user_name, 
-              u.phone as user_phone, 
-              u.role as user_role,
+              COALESCE(u.full_name, p.card_number, 'کاربر') as user_name, 
+              COALESCE(u.phone, p.user_id) as user_phone, 
+              COALESCE(u.role, 'client') as user_role,
               sp.title as part_name
        FROM payments p
-       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN users u ON p.user_id = u.id OR (u.phone IS NOT NULL AND p.user_id = u.phone)
        LEFT JOIN spare_parts sp ON p.related_id = sp.id
        ORDER BY p.created_at DESC`
     );
@@ -62,12 +62,12 @@ export const PaymentRepository = {
     const pool = getDbPool();
     const [rows] = await pool.query(
       `SELECT p.*, 
-              u.full_name as user_name, 
-              u.phone as user_phone, 
-              u.role as user_role,
+              COALESCE(u.full_name, p.card_number, 'کاربر') as user_name, 
+              COALESCE(u.phone, p.user_id) as user_phone, 
+              COALESCE(u.role, 'client') as user_role,
               sp.title as part_name
        FROM payments p
-       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN users u ON p.user_id = u.id OR (u.phone IS NOT NULL AND p.user_id = u.phone)
        LEFT JOIN spare_parts sp ON p.related_id = sp.id
        WHERE p.id = ?`,
       [id]
@@ -80,12 +80,12 @@ export const PaymentRepository = {
     const pool = getDbPool();
     const [rows] = await pool.query(
       `SELECT p.*, 
-              u.full_name as user_name, 
-              u.phone as user_phone, 
-              u.role as user_role,
+              COALESCE(u.full_name, p.card_number, 'کاربر') as user_name, 
+              COALESCE(u.phone, p.user_id) as user_phone, 
+              COALESCE(u.role, 'client') as user_role,
               sp.title as part_name
        FROM payments p
-       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN users u ON p.user_id = u.id OR (u.phone IS NOT NULL AND p.user_id = u.phone)
        LEFT JOIN spare_parts sp ON p.related_id = sp.id
        WHERE p.authority = ?`,
       [authority]
@@ -94,20 +94,22 @@ export const PaymentRepository = {
     return arr.length > 0 ? formatPaymentRow(arr[0]) : null;
   },
 
-  async findByUserId(userId: string): Promise<any[]> {
+  async findByUserId(userId: string, userPhone?: string): Promise<any[]> {
     const pool = getDbPool();
     const [rows] = await pool.query(
       `SELECT p.*, 
-              u.full_name as user_name, 
-              u.phone as user_phone, 
-              u.role as user_role,
+              COALESCE(u.full_name, p.card_number, 'کاربر') as user_name, 
+              COALESCE(u.phone, p.user_id) as user_phone, 
+              COALESCE(u.role, 'client') as user_role,
               sp.title as part_name
        FROM payments p
-       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN users u ON p.user_id = u.id OR (u.phone IS NOT NULL AND p.user_id = u.phone)
        LEFT JOIN spare_parts sp ON p.related_id = sp.id
-       WHERE p.user_id = ? 
+       WHERE (p.user_id = ? AND ? != '') 
+          OR (p.user_id = ? AND ? != '')
+          OR (u.phone = ? AND ? != '')
        ORDER BY p.created_at DESC`,
-      [userId]
+      [userId || "", userId || "", userPhone || "", userPhone || "", userPhone || "", userPhone || ""]
     );
     return (rows as any[]).map(formatPaymentRow);
   },
@@ -135,7 +137,8 @@ export const PaymentRepository = {
        ref_id = VALUES(ref_id),
        ref_code = VALUES(ref_code),
        card_number = VALUES(card_number),
-       amount = VALUES(amount)`,
+       amount = VALUES(amount),
+       payment_method = VALUES(payment_method)`,
       [id, userId, orderId, relatedType, relatedId, amount, authority, refId, refCode, cardNumber, status, paymentMethod]
     );
 
@@ -151,6 +154,18 @@ export const PaymentRepository = {
     if (updates.ref_id !== undefined || updates.refId !== undefined) {
       fields.push("ref_id = ?");
       values.push(updates.ref_id ?? updates.refId);
+    }
+    if (updates.ref_code !== undefined || updates.refCode !== undefined) {
+      fields.push("ref_code = ?");
+      values.push(updates.ref_code ?? updates.refCode);
+    }
+    if (updates.card_number !== undefined || updates.cardNumber !== undefined || updates.cardHolder !== undefined) {
+      fields.push("card_number = ?");
+      values.push(updates.card_number ?? updates.cardNumber ?? updates.cardHolder);
+    }
+    if (updates.payment_method !== undefined || updates.paymentMethod !== undefined) {
+      fields.push("payment_method = ?");
+      values.push(updates.payment_method ?? updates.paymentMethod);
     }
     if (updates.amount !== undefined) { fields.push("amount = ?"); values.push(updates.amount); }
 

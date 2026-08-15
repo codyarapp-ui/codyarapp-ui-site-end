@@ -21,8 +21,11 @@ export function setMySqlOffline(val: boolean) {
   isMySqlOffline = false;
 }
 
+let isSchemaEnsured = false;
 export async function ensureDatabaseSchema(): Promise<void> {
+  if (isSchemaEnsured) return;
   try {
+    isSchemaEnsured = true;
     const p = getDbPool();
 
     // 1. users table
@@ -715,11 +718,10 @@ export async function ensureDatabaseSchema(): Promise<void> {
 
 export async function checkDbConnection(): Promise<boolean> {
   const dbHost = process.env.DB_HOST || "localhost";
-  let conn: any = null;
   try {
     const p = getDbPool();
-    conn = await Promise.race([
-      p.getConnection(),
+    await Promise.race([
+      p.query("SELECT 1"),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("DB Connection timeout")), 3500)
       )
@@ -730,10 +732,6 @@ export async function checkDbConnection(): Promise<boolean> {
   } catch (err: any) {
     console.warn(`[DB Connection] Connection check to ${dbHost} status: ${err.message}.`);
     return false;
-  } finally {
-    if (conn) {
-      try { conn.release(); } catch {}
-    }
   }
 }
 
@@ -747,6 +745,7 @@ export function getDbPool(): mysql.Pool {
     const dbPassword = process.env.DB_PASSWORD || process.env.DB_PASS || "";
     const dbName = process.env.DB_NAME || "kodyar24";
     const dbPort = parseInt(process.env.DB_PORT || "3306");
+    const connectionLimit = Number(process.env.DB_CONNECTION_LIMIT) || 10;
 
     pool = mysql.createPool({
       host: dbHost,
@@ -755,22 +754,12 @@ export function getDbPool(): mysql.Pool {
       database: dbName,
       port: dbPort,
       waitForConnections: true,
-      connectionLimit: 10,
-      maxIdle: 2,
-      idleTimeout: 30000, // Close idle connections after 30 seconds
-      enableKeepAlive: true,
-      keepAliveInitialDelay: 10000,
+      connectionLimit,
+      maxIdle: 0, // Immediately close idle connections to release MySQL server slots
+      idleTimeout: 10000, // Close any lingering idle connections after 10 seconds
+      enableKeepAlive: false, // Avoid persistent idle socket hold on shared hosts
       queueLimit: 0,
       connectTimeout: 5000
-    });
-
-    // Enforce 120-second max wait_timeout on the MySQL server for all pool connections
-    pool.on("connection", (connection: any) => {
-      try {
-        if (connection && typeof connection.query === 'function') {
-          connection.query("SET SESSION wait_timeout = 120", () => {});
-        }
-      } catch (e) {}
     });
 
     const origQuery = pool.query.bind(pool);
@@ -874,24 +863,35 @@ export function verifyPassword(password: string, hash: string): boolean {
 }
 
 export async function getCurrentUserAsync(req: express.Request): Promise<any | null> {
-  const cookieHeader = req.headers.cookie || "";
+  if (req && (req as any)._cachedCurrentUser !== undefined) {
+    return (req as any)._cachedCurrentUser;
+  }
+
+  const setAndReturn = (val: any) => {
+    if (req) {
+      (req as any)._cachedCurrentUser = val;
+    }
+    return val;
+  };
+
+  const cookieHeader = req?.headers?.cookie || "";
   const match = cookieHeader.match(/session_user_id=([^; ]+)/);
   const tokenMatch = cookieHeader.match(/access_token=([^; ]+)/);
   let sessionUserId = match ? match[1] : null;
   let accessToken = tokenMatch ? tokenMatch[1] : null;
 
-  if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+  if (req?.headers?.authorization && req.headers.authorization.startsWith("Bearer ")) {
     accessToken = req.headers.authorization.split(" ")[1];
   }
 
-  if (!sessionUserId && req.headers["x-session-token"]) {
+  if (!sessionUserId && req?.headers?.["x-session-token"]) {
     sessionUserId = Array.isArray(req.headers["x-session-token"])
       ? req.headers["x-session-token"][0]
       : (req.headers["x-session-token"] as string);
   }
 
   if (isMySqlOffline) {
-    return null;
+    return setAndReturn(null);
   }
 
   try {
@@ -908,15 +908,15 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
       }
     }
 
-    if (!sessionUserId) return null;
+    if (!sessionUserId) return setAndReturn(null);
 
     const [userRows]: any = await p.query("SELECT * FROM users WHERE id = ? OR phone = ?", [sessionUserId, sessionUserId]);
     if (userRows.length > 0) {
       const u = userRows[0];
       try {
         const [subRows]: any = await p.query(
-          "SELECT * FROM subscriptions WHERE user_id = ? AND (status = 'active' OR status = 'completed') ORDER BY end_date DESC",
-          [u.id]
+          "SELECT * FROM subscriptions WHERE (user_id = ? OR (user_id = ? AND ? != '')) AND (status = 'active' OR status = 'completed') ORDER BY end_date DESC",
+          [u.id, u.phone || "", u.phone || ""]
         );
         const activeSub = (subRows || []).find((s: any) => new Date(s.end_date || s.expiry_date) > new Date());
         if (activeSub) {
@@ -961,8 +961,8 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
         }
 
         const [payRows]: any = await p.query(
-          "SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC",
-          [u.id]
+          "SELECT * FROM payments WHERE user_id = ? OR (user_id = ? AND ? != '') ORDER BY created_at DESC",
+          [u.id, u.phone || "", u.phone || ""]
         );
         u.payments = (payRows || []).map((pay: any) => {
           const isSub = pay.related_type === 'subscription' || (pay.related_id && String(pay.related_id).includes('month'));
@@ -981,9 +981,9 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
           `SELECT po.*, sp.title as part_name, sp.category as part_category 
            FROM part_orders po 
            LEFT JOIN spare_parts sp ON po.part_id = sp.id 
-           WHERE po.user_id = ? OR po.buyer_phone = ? 
+           WHERE po.user_id = ? OR (po.user_id = ? AND ? != '') OR (po.buyer_phone = ? AND ? != '') 
            ORDER BY po.created_at DESC`,
-          [u.id, u.phone || ""]
+          [u.id, u.phone || "", u.phone || "", u.phone || "", u.phone || ""]
         );
         u.part_purchases = (poRows || []).map((po: any) => ({
           id: po.id,
@@ -1022,7 +1022,7 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
       } catch (e) {
         console.warn("[getCurrentUserAsync] Sub/Pay/Orders fetch error:", e);
       }
-      return u;
+      return setAndReturn(u);
     }
 
     const [techRows]: any = await p.query("SELECT * FROM technicians WHERE id = ? OR phone = ?", [sessionUserId, sessionUserId]);
@@ -1033,8 +1033,8 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
       let techPayments: any[] = [];
       try {
         const [subRows]: any = await p.query(
-          "SELECT * FROM subscriptions WHERE user_id = ? AND (status = 'active' OR status = 'completed') ORDER BY end_date DESC",
-          [tech.id]
+          "SELECT * FROM subscriptions WHERE (user_id = ? OR (user_id = ? AND ? != '')) AND (status = 'active' OR status = 'completed') ORDER BY end_date DESC",
+          [tech.id, tech.phone || "", tech.phone || ""]
         );
         const activeSub = (subRows || []).find((s: any) => new Date(s.end_date || s.expiry_date) > new Date());
         if (activeSub) {
@@ -1068,8 +1068,8 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
         }
 
         const [payRows]: any = await p.query(
-          "SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC",
-          [tech.id]
+          "SELECT * FROM payments WHERE user_id = ? OR (user_id = ? AND ? != '') ORDER BY created_at DESC",
+          [tech.id, tech.phone || "", tech.phone || ""]
         );
         techPayments = (payRows || []).map((pay: any) => ({
           ...pay,
@@ -1083,7 +1083,7 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
         console.warn("[getCurrentUserAsync] Tech Sub/Pay fetch error:", e);
       }
 
-      return {
+      return setAndReturn({
         id: tech.id,
         phone: tech.phone,
         full_name: tech.full_name || tech.name,
@@ -1094,14 +1094,14 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
         subscription: techSub,
         has_active_subscription: hasActiveSub,
         payments: techPayments
-      };
+      });
     }
   } catch (err: any) {
     setMySqlOffline(true);
     console.warn("[getCurrentUserAsync] Error fetching user:", err.message);
   }
 
-  return null;
+  return setAndReturn(null);
 }
 
 
