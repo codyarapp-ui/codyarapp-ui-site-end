@@ -709,10 +709,65 @@ app.delete("/api/orders/:id", requireAdmin, async (req, res) => {
   }
 });
 
+function formatSparePartForApi(p: any) {
+  if (!p) return null;
+  const compBrands = p.compatible_brands || (Array.isArray(p.compatibility) ? p.compatibility.join("، ") : (Array.isArray(p.compatible_models) ? p.compatible_models.join("، ") : (p.brand || "")));
+  const shortDesc = p.short_description || p.description || p.technical_description || "";
+  const devCat = p.device_category || p.category || "";
+  const mdl = p.model || p.device_model || "";
+  const brandVal = p.brand || (typeof compBrands === "string" ? compBrands.split("،")[0].trim() : "");
+  const img = p.image || p.image_url || p.imageUrl || "";
+
+  return {
+    id: p.id,
+    name: p.name || p.title || "",
+    title: p.title || p.name || "",
+    device_category: devCat,
+    category: devCat,
+    brand: brandVal,
+    model: mdl,
+    device_model: mdl,
+    compatible_brands: compBrands,
+    price: Number(p.price) || 0,
+    stock: Number(p.stock) || 0,
+    image: img,
+    image_url: img,
+    imageUrl: img,
+    short_description: shortDesc,
+    description: shortDesc,
+    technical_description: shortDesc,
+    code: p.code || p.part_number || p.partNumber || "",
+    status: p.status || "available"
+  };
+}
+
+// App API Endpoints for Mobile App & Web Store
+app.get(["/api/v1/spare-parts", "/api/spare-parts"], async (req, res) => {
+  try {
+    const rawParts = await SparePartRepository.findAll();
+    const formatted = (rawParts || []).map(formatSparePartForApi);
+    return res.status(200).json(formatted);
+  } catch (err: any) {
+    return res.status(200).json([]);
+  }
+});
+
+app.get(["/api/v1/spare-parts/:id", "/api/spare-parts/:id"], async (req, res) => {
+  try {
+    const item = await SparePartRepository.findById(req.params.id);
+    if (!item) return res.status(404).json({ status: "error", message: "قطعه یافت نشد" });
+    const formatted = formatSparePartForApi(item);
+    return res.status(200).json(formatted);
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
 app.get("/api/store/parts", async (req, res) => {
   try {
     const parts = await SparePartRepository.findAll();
-    return res.json({ status: "ok", parts, spareParts: parts, data: { parts } });
+    const formatted = (parts || []).map(formatSparePartForApi);
+    return res.json({ status: "ok", parts: formatted, spareParts: formatted, data: { parts: formatted } });
   } catch (err: any) {
     return res.json({ status: "ok", parts: [], spareParts: [], data: { parts: [] } });
   }
@@ -721,7 +776,8 @@ app.get("/api/store/parts", async (req, res) => {
 app.post("/api/store/parts", requireAdmin, async (req, res) => {
   try {
     const created = await SparePartRepository.create(req.body);
-    return res.json({ status: "ok", part: created, sparePart: created });
+    const formatted = formatSparePartForApi(created);
+    return res.json({ status: "ok", part: formatted, sparePart: formatted });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -730,7 +786,8 @@ app.post("/api/store/parts", requireAdmin, async (req, res) => {
 app.put("/api/store/parts/:id", requireAdmin, async (req, res) => {
   try {
     const updated = await SparePartRepository.update(req.params.id, req.body);
-    return res.json({ status: "ok", part: updated, sparePart: updated });
+    const formatted = formatSparePartForApi(updated);
+    return res.json({ status: "ok", part: formatted, sparePart: formatted });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -861,7 +918,8 @@ app.post(["/api/store/order", "/api/part-orders", "/api/store/purchase"], async 
 app.get("/api/parts", async (req, res) => {
   try {
     const parts = await SparePartRepository.findAll();
-    return res.json({ status: "ok", parts, spareParts: parts, data: parts });
+    const formatted = (parts || []).map(formatSparePartForApi);
+    return res.json({ status: "ok", parts: formatted, spareParts: formatted, data: formatted });
   } catch (err: any) {
     return res.json({ status: "ok", parts: [], spareParts: [], data: [] });
   }
@@ -869,11 +927,10 @@ app.get("/api/parts", async (req, res) => {
 
 app.get("/api/parts/:id", async (req, res) => {
   try {
-    const item = await SparePartRepository.findById
-      ? await (SparePartRepository as any).findById(req.params.id)
-      : null;
+    const item = await SparePartRepository.findById(req.params.id);
     if (!item) return res.status(404).json({ status: "error", message: "قطعه یافت نشد" });
-    return res.json({ status: "ok", part: item, sparePart: item, data: item });
+    const formatted = formatSparePartForApi(item);
+    return res.json({ status: "ok", part: formatted, sparePart: formatted, data: formatted });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }

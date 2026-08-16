@@ -1101,11 +1101,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newPartCategory, setNewPartCategory] = React.useState('');
   const [newPartModel, setNewPartModel] = React.useState('');
   const [newPartBrands, setNewPartBrands] = React.useState<string[]>([]);
+  const [newPartCompatibleBrands, setNewPartCompatibleBrands] = React.useState('');
   const [newPartStock, setNewPartStock] = React.useState<number | ''>('');
   const [newPartStockError, setNewPartStockError] = React.useState('');
   const [newPartImage, setNewPartImage] = React.useState('');
   const [newPartImageError, setNewPartImageError] = React.useState('');
   const [isAddPartOpen, setIsAddPartOpen] = React.useState(false);
+
+  // Full edit modal states for spare parts
+  const [editingFullPart, setEditingFullPart] = React.useState<SparePart | null>(null);
+  const [editPartName, setEditPartName] = React.useState('');
+  const [editPartCategory, setEditPartCategory] = React.useState('');
+  const [editPartModel, setEditPartModel] = React.useState('');
+  const [editPartCompatibleBrands, setEditPartCompatibleBrands] = React.useState('');
+  const [editPartDescription, setEditPartDescription] = React.useState('');
+  const [editPartPrice, setEditPartPrice] = React.useState<number | ''>('');
+  const [editPartStock, setEditPartStock] = React.useState<number | ''>('');
+  const [editPartImage, setEditPartImage] = React.useState('');
 
   // Inline edit states for global config
   const [editingBrand, setEditingBrand] = React.useState<string | null>(null);
@@ -1557,37 +1569,60 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       finalImage = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f1f5f9'/><text x='50' y='55' font-size='28' text-anchor='middle'>⚙️</text></svg>";
     }
 
+    const compBrandsString = newPartCompatibleBrands.trim() || (newPartBrands.length > 0 ? newPartBrands.join('، ') : 'عمومی');
+    const compBrandsArray = newPartBrands.length > 0 
+      ? newPartBrands 
+      : (newPartCompatibleBrands ? newPartCompatibleBrands.split(/[،,]/).map(s => s.trim()).filter(Boolean) : ['عمومی']);
+
     const newPartObj: SparePart = {
       id: 'part_' + Date.now(),
       name: newPartName.trim(),
-      description: newPartDescription.trim() || `قطعه اورجینال ${newPartName.trim()}`,
-      price: priceNum,
-      image: finalImage,
+      title: newPartName.trim(),
+      device_category: newPartCategory || 'سایر',
       category: newPartCategory || 'سایر',
-      brand: newPartBrands.length > 0 ? newPartBrands[0] : 'عمومی',
-      compatibility: newPartBrands.length > 0 ? newPartBrands : ['عمومی'],
       model: newPartModel.trim() || 'همه مدل‌ها',
-      stock: stockNum
+      device_model: newPartModel.trim() || 'همه مدل‌ها',
+      brand: compBrandsArray[0] || 'عمومی',
+      compatible_brands: compBrandsString,
+      compatibility: compBrandsArray,
+      compatible_models: compBrandsArray,
+      short_description: newPartDescription.trim() || `قطعه اورجینال ${newPartName.trim()}`,
+      description: newPartDescription.trim() || `قطعه اورجینال ${newPartName.trim()}`,
+      technical_description: newPartDescription.trim() || `قطعه اورجینال ${newPartName.trim()}`,
+      price: priceNum,
+      stock: stockNum,
+      image: finalImage,
+      image_url: finalImage
     };
 
     if (onUpdateSparePartsList) {
       onUpdateSparePartsList([...spareParts, newPartObj]);
-      setPartMessage({ type: 'success', text: `محصول قطعه یدکی "${newPartName.trim()}" با موفقیت ذخیره شد.` });
-      alert(`قطعه فنی جدید "${newPartName.trim()}" با موفقیت ثبت نهایی شد و در انبار محصولات در دسترس قرار گرفت.`);
-      // Reset form
-      setNewPartName('');
-      setNewPartDescription('');
-      setNewPartPrice('');
-      setNewPartPriceError('');
-      setNewPartCategory('');
-      setNewPartModel('');
-      setNewPartBrands([]);
-      setNewPartStock('');
-      setNewPartStockError('');
-      setNewPartImage('');
-      setNewPartImageError('');
-      setIsAddPartOpen(false);
     }
+
+    // Sync with backend API
+    const token = localStorage.getItem('session_user_id') || localStorage.getItem('token') || '';
+    fetch('/api/store/parts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify(newPartObj)
+    }).catch(e => console.error("Error creating part:", e));
+
+    setPartMessage({ type: 'success', text: `محصول قطعه یدکی "${newPartName.trim()}" با موفقیت ذخیره شد.` });
+    alert(`قطعه فنی جدید "${newPartName.trim()}" با موفقیت ثبت نهایی شد و در انبار محصولات در دسترس قرار گرفت.`);
+    // Reset form
+    setNewPartName('');
+    setNewPartDescription('');
+    setNewPartPrice('');
+    setNewPartPriceError('');
+    setNewPartCategory('');
+    setNewPartModel('');
+    setNewPartBrands([]);
+    setNewPartCompatibleBrands('');
+    setNewPartStock('');
+    setNewPartStockError('');
+    setNewPartImage('');
+    setNewPartImageError('');
+    setIsAddPartOpen(false);
   };
 
   // platform stats
@@ -1885,6 +1920,84 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     onUpdatePartStock(id, tempStock, tempPrice);
     setEditingPartId(null);
     alert('موجودی و قیمت قطعه با موفقیت در بانک اطلاعاتی بروزرسانی شد.');
+  };
+
+  const handleOpenEditFullPart = (p: SparePart) => {
+    setEditingFullPart(p);
+    setEditPartName(p.name || p.title || '');
+    setEditPartCategory(p.device_category || p.category || '');
+    setEditPartModel(p.model || p.device_model || '');
+    const cb = p.compatible_brands || (Array.isArray(p.compatibility) ? p.compatibility.join('، ') : (p.brand || ''));
+    setEditPartCompatibleBrands(cb);
+    setEditPartDescription(p.short_description || p.description || p.technical_description || '');
+    setEditPartPrice(p.price !== undefined ? p.price : '');
+    setEditPartStock(p.stock !== undefined ? p.stock : '');
+    setEditPartImage(p.image || p.image_url || '');
+  };
+
+  const handleSaveFullPartChanges = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingFullPart) return;
+
+    if (!editPartName.trim()) {
+      alert('وارد کردن نام قطعه الزامی است.');
+      return;
+    }
+
+    const priceNum = Number(editPartPrice);
+    if (editPartPrice === '' || isNaN(priceNum) || priceNum < 0) {
+      alert('قیمت قطعه باید یک عدد معتبر و بزرگتر یا مساوی صفر باشد.');
+      return;
+    }
+
+    const stockNum = Number(editPartStock);
+    if (editPartStock === '' || isNaN(stockNum) || stockNum < 0) {
+      alert('موجودی انبار باید یک عدد معتبر و بزرگتر یا مساوی صفر باشد.');
+      return;
+    }
+
+    const compBrandsString = editPartCompatibleBrands.trim() || 'عمومی';
+    const compBrandsArray = compBrandsString.split(/[،,]/).map(s => s.trim()).filter(Boolean);
+
+    const updatedPart: SparePart = {
+      ...editingFullPart,
+      name: editPartName.trim(),
+      title: editPartName.trim(),
+      device_category: editPartCategory.trim() || 'سایر',
+      category: editPartCategory.trim() || 'سایر',
+      model: editPartModel.trim() || 'همه مدل‌ها',
+      device_model: editPartModel.trim() || 'همه مدل‌ها',
+      compatible_brands: compBrandsString,
+      compatibility: compBrandsArray,
+      compatible_models: compBrandsArray,
+      brand: compBrandsArray[0] || 'عمومی',
+      short_description: editPartDescription.trim(),
+      description: editPartDescription.trim(),
+      technical_description: editPartDescription.trim(),
+      price: priceNum,
+      stock: stockNum,
+      image: editPartImage.trim() || editingFullPart.image || '',
+      image_url: editPartImage.trim() || editingFullPart.image_url || ''
+    };
+
+    const updatedList = spareParts.map(p => p.id === editingFullPart.id ? updatedPart : p);
+    if (onUpdateSparePartsList) {
+      onUpdateSparePartsList(updatedList);
+    }
+
+    try {
+      const token = localStorage.getItem('session_user_id') || localStorage.getItem('token') || '';
+      await fetch(`/api/store/parts/${encodeURIComponent(editingFullPart.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+        body: JSON.stringify(updatedPart)
+      });
+    } catch (err) {
+      console.error("Error updating part on server:", err);
+    }
+
+    setEditingFullPart(null);
+    alert(`مشخصات قطعه "${updatedPart.name}" با موفقیت بروزرسانی شد.`);
   };
 
   const handleAddBrand = () => {
@@ -4620,41 +4733,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-slate-350 text-[10px] font-extrabold mb-1">دسته‌بندی دستگاه مربوطه *</label>
-                    <select
+                    <label className="block text-slate-350 text-[10px] font-extrabold mb-1">دسته‌بندی دستگاه (device_category) *</label>
+                    <input
+                      type="text"
                       required
+                      list="device-categories-list"
                       value={newPartCategory}
                       onChange={(e) => setNewPartCategory(e.target.value)}
-                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-xl p-2.5 text-xs font-bold outline-none text-right cursor-pointer focus:border-blue-500 transition-all"
-                    >
-                      <option value="">⚙️ انتخاب دسته‌بندی</option>
+                      placeholder="مانند: پکیج دیواری، کولر گازی، ماشین لباسشویی"
+                      className="w-full bg-white border border-slate-300 text-slate-900 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none text-right focus:border-blue-500 transition-all font-sans"
+                    />
+                    <datalist id="device-categories-list">
                       {categoriesList.map((cat) => (
-                        <option key={cat} value={cat}>{cat}</option>
+                        <option key={cat} value={cat} />
                       ))}
-                      <option value="سایر">سایر موارد</option>
-                    </select>
+                      <option value="پکیج دیواری" />
+                      <option value="کولر گازی" />
+                      <option value="ماشین لباسشویی" />
+                      <option value="یخچال و فریزر" />
+                      <option value="ماشین ظرفشویی" />
+                      <option value="آبگرمکن" />
+                    </datalist>
                   </div>
 
                   <div>
-                    <label className="block text-slate-350 text-[10px] font-extrabold mb-1">آدرس آیکون یا تصویر کالا (اختیاری)</label>
+                    <label className="block text-slate-350 text-[10px] font-extrabold mb-1">مدل دستگاه (model)</label>
                     <input
-                      type="url"
-                      value={newPartImage}
-                      onChange={(e) => {
-                        setNewPartImage(e.target.value);
-                        if (e.target.value.trim()) {
-                          const check = validateUrl(e.target.value);
-                          setNewPartImageError(check.isValid ? '' : (check.error || ''));
-                        } else {
-                          setNewPartImageError('');
-                        }
-                      }}
-                      placeholder="لینک تصویر مستقیم یا رها کنید تا خودکار قرار گیرد"
-                      className="w-full bg-white border border-slate-300 text-slate-900 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-semibold outline-none text-left focus:border-blue-500 transition-all font-mono"
+                      type="text"
+                      value={newPartModel}
+                      onChange={(e) => setNewPartModel(e.target.value)}
+                      placeholder="مانند: ورونا، پرلا ۲۴، کالدا ونزیا"
+                      className="w-full bg-white border border-slate-300 text-slate-900 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none text-right focus:border-blue-500 transition-all font-sans"
                     />
-                    {newPartImageError && (
-                      <p className="text-red-400 text-[10px] mt-1 text-right font-medium">{newPartImageError}</p>
-                    )}
                   </div>
                 </div>
 
@@ -4720,56 +4830,78 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-slate-350 text-[10px] font-extrabold mb-1">مدل دستگاه (اختیاری)</label>
+                    <label className="block text-slate-350 text-[10px] font-extrabold mb-1">آدرس آیکون یا تصویر کالا (اختیاری)</label>
                     <input
-                      type="text"
-                      value={newPartModel}
-                      onChange={(e) => setNewPartModel(e.target.value)}
-                      placeholder="مانند: ورونا پرلا ۲۴ یا همه مدل‌ها"
-                      className="w-full bg-white border border-slate-300 text-slate-900 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none text-right focus:border-blue-500 transition-all font-sans"
+                      type="url"
+                      value={newPartImage}
+                      onChange={(e) => {
+                        setNewPartImage(e.target.value);
+                        if (e.target.value.trim()) {
+                          const check = validateUrl(e.target.value);
+                          setNewPartImageError(check.isValid ? '' : (check.error || ''));
+                        } else {
+                          setNewPartImageError('');
+                        }
+                      }}
+                      placeholder="لینک تصویر مستقیم یا رها کنید تا خودکار قرار گیرد"
+                      className="w-full bg-white border border-slate-300 text-slate-900 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-semibold outline-none text-left focus:border-blue-500 transition-all font-mono"
                     />
+                    {newPartImageError && (
+                      <p className="text-red-400 text-[10px] mt-1 text-right font-medium">{newPartImageError}</p>
+                    )}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-slate-350 text-[10px] font-extrabold mb-1">برندهای سازگار (چند گزینه‌ای)</label>
-                  <div className="flex flex-wrap gap-2.5 bg-slate-950 p-3.5 rounded-2xl border border-slate-800">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-slate-400 text-[10px]">روی برندها کلیک کنید یا مستقیماً تایپ فرمایید (جدا شده با کاما یا ویرگول فارسی)</span>
+                    <label className="block text-slate-350 text-[10px] font-extrabold">برندهای سازگار (compatible_brands)</label>
+                  </div>
+                  <input
+                    type="text"
+                    value={newPartCompatibleBrands}
+                    onChange={(e) => setNewPartCompatibleBrands(e.target.value)}
+                    placeholder="مانند: بوتان، ایران رادیاتور"
+                    className="w-full bg-white border border-slate-300 text-slate-900 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none text-right focus:border-blue-500 transition-all font-sans mb-2"
+                  />
+                  <div className="flex flex-wrap gap-1.5 bg-slate-950 p-2.5 rounded-xl border border-slate-800">
                     {brandsList.map((brand) => {
-                      const isSelected = newPartBrands.includes(brand);
+                      const currentSelected = newPartCompatibleBrands.split(/[،,]/).map(s => s.trim()).filter(Boolean);
+                      const isSelected = currentSelected.includes(brand);
                       return (
                         <button
                           key={brand}
                           type="button"
                           onClick={() => {
+                            let updated: string[];
                             if (isSelected) {
-                              setNewPartBrands(newPartBrands.filter(b => b !== brand));
+                              updated = currentSelected.filter(b => b !== brand);
                             } else {
-                              setNewPartBrands([...newPartBrands, brand]);
+                              updated = [...currentSelected, brand];
                             }
+                            setNewPartCompatibleBrands(updated.join('، '));
+                            setNewPartBrands(updated);
                           }}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer ${
                             isSelected
                               ? 'bg-blue-600 text-white border border-blue-500'
-                              : 'bg-slate-850 bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'
+                              : 'bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'
                           }`}
                         >
                           {brand}
                         </button>
                       );
                     })}
-                    {brandsList.length === 0 && (
-                      <span className="text-slate-500 text-[10px]">ابتدا برندی تعریف کنید یا پیشفرض عمومی اعمال خواهد شد.</span>
-                    )}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-slate-350 text-[10px] font-extrabold mb-1">توضیحات کوتاه فنی محصول</label>
+                  <label className="block text-slate-350 text-[10px] font-extrabold mb-1">توضیحات کوتاه فنی (short_description)</label>
                   <textarea
                     rows={2}
                     value={newPartDescription}
                     onChange={(e) => setNewPartDescription(e.target.value)}
-                    placeholder="مانند: ساخت کشور ایتالیا، دارای سه سرعته مجزا، سیم‌پیچ مسی صد در صد تضمینی..."
+                    placeholder="مانند: ساخت ایتالیا، ۳ سرعته، سیم‌پیچ ۱۰۰٪ مسی با ضمانت اصالت..."
                     className="w-full bg-white border border-slate-300 text-slate-900 placeholder-slate-400 rounded-xl p-3 text-xs font-bold outline-none text-right focus:border-blue-500 transition-all font-sans"
                   />
                 </div>
@@ -4790,6 +4922,145 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </button>
                 </div>
               </form>
+            </div>
+          )}
+
+          {/* Edit Full Spare Part Modal */}
+          {editingFullPart && (
+            <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6 space-y-4 text-right animate-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
+                <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-mono tracking-wider text-blue-600 font-extrabold">EDIT SPARE PART</span>
+                  <h4 className="text-sm font-extrabold text-slate-900">ویرایش اطلاعات قطعه یدکی</h4>
+                </div>
+
+                <form onSubmit={handleSaveFullPartChanges} className="space-y-4 text-xs font-bold text-slate-700">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-600 text-[10px] font-extrabold mb-1">نام قطعه یدکی *</label>
+                      <input
+                        type="text"
+                        required
+                        value={editPartName}
+                        onChange={(e) => setEditPartName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-250 text-slate-900 rounded-xl px-3 py-2 text-xs font-bold outline-none text-right focus:border-blue-500 focus:bg-white transition-all font-sans"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-600 text-[10px] font-extrabold mb-1">دسته‌بندی دستگاه (device_category) *</label>
+                      <input
+                        type="text"
+                        required
+                        list="edit-device-categories-list"
+                        value={editPartCategory}
+                        onChange={(e) => setEditPartCategory(e.target.value)}
+                        placeholder="مانند: پکیج دیواری، کولر گازی..."
+                        className="w-full bg-slate-50 border border-slate-250 text-slate-900 rounded-xl px-3 py-2 text-xs font-bold outline-none text-right focus:border-blue-500 focus:bg-white transition-all font-sans"
+                      />
+                      <datalist id="edit-device-categories-list">
+                        {categoriesList.map((cat) => (
+                          <option key={cat} value={cat} />
+                        ))}
+                        <option value="پکیج دیواری" />
+                        <option value="کولر گازی" />
+                        <option value="ماشین لباسشویی" />
+                        <option value="یخچال و فریزر" />
+                        <option value="ماشین ظرفشویی" />
+                        <option value="آبگرمکن" />
+                      </datalist>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-600 text-[10px] font-extrabold mb-1">مدل دستگاه (model)</label>
+                      <input
+                        type="text"
+                        value={editPartModel}
+                        onChange={(e) => setEditPartModel(e.target.value)}
+                        placeholder="مانند: ورونا، پرلا ۲۴..."
+                        className="w-full bg-slate-50 border border-slate-250 text-slate-900 rounded-xl px-3 py-2 text-xs font-bold outline-none text-right focus:border-blue-500 focus:bg-white transition-all font-sans"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-600 text-[10px] font-extrabold mb-1">برندهای سازگار (compatible_brands)</label>
+                      <input
+                        type="text"
+                        value={editPartCompatibleBrands}
+                        onChange={(e) => setEditPartCompatibleBrands(e.target.value)}
+                        placeholder="مانند: بوتان، ایران رادیاتور"
+                        className="w-full bg-slate-50 border border-slate-250 text-slate-900 rounded-xl px-3 py-2 text-xs font-bold outline-none text-right focus:border-blue-500 focus:bg-white transition-all font-sans"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-slate-600 text-[10px] font-extrabold mb-1">قیمت کالا (تومان) *</label>
+                      <input
+                        type="number"
+                        required
+                        min={0}
+                        value={editPartPrice}
+                        onChange={(e) => setEditPartPrice(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="w-full bg-slate-50 border border-slate-250 text-slate-900 rounded-xl px-3 py-2 text-xs font-bold outline-none text-center focus:border-blue-500 focus:bg-white transition-all font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-600 text-[10px] font-extrabold mb-1">موجودی انبار *</label>
+                      <input
+                        type="number"
+                        required
+                        min={0}
+                        value={editPartStock}
+                        onChange={(e) => setEditPartStock(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="w-full bg-slate-50 border border-slate-250 text-slate-900 rounded-xl px-3 py-2 text-xs font-bold outline-none text-center focus:border-blue-500 focus:bg-white transition-all font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-600 text-[10px] font-extrabold mb-1">آدرس تصویر کالا</label>
+                      <input
+                        type="url"
+                        value={editPartImage}
+                        onChange={(e) => setEditPartImage(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full bg-slate-50 border border-slate-250 text-slate-900 rounded-xl px-3 py-2 text-xs font-medium outline-none text-left focus:border-blue-500 focus:bg-white transition-all font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-600 text-[10px] font-extrabold mb-1">توضیحات کوتاه فنی (short_description)</label>
+                    <textarea
+                      rows={3}
+                      value={editPartDescription}
+                      onChange={(e) => setEditPartDescription(e.target.value)}
+                      placeholder="ساخت ایتالیا، ۳ سرعته، سیم‌پیچ ۱۰۰٪ مسی..."
+                      className="w-full bg-slate-50 border border-slate-250 text-slate-900 rounded-xl p-3 text-xs font-medium outline-none text-right focus:border-blue-500 focus:bg-white transition-all font-sans"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
+                    <button
+                      type="submit"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-6 py-2.5 text-xs font-extrabold shadow-md cursor-pointer transition-all active:scale-95"
+                    >
+                      ذخیره تغییرات قطعه
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingFullPart(null)}
+                      className="bg-slate-150 hover:bg-slate-200 text-slate-700 rounded-xl px-5 py-2.5 text-xs font-extrabold cursor-pointer transition-all"
+                    >
+                      انصراف
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
           )}
 
@@ -4837,86 +5108,112 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6 p-5 bg-slate-50">
-                {filteredSpareParts.map((p) => (
-                  <div key={p.id} className="bg-white border border-slate-200 hover:border-slate-300 rounded-3xl p-5 flex flex-col justify-between gap-4 text-right shadow-3xs transition-all duration-150">
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={p.image}
-                        alt={p.name}
-                        className="w-12 h-12 rounded-xl object-cover bg-slate-50 border border-slate-100 flex-shrink-0"
-                      />
-                      <div>
-                        <h4 className="font-extrabold text-slate-800 text-xs">{p.name}</h4>
-                        <p className="text-slate-400 text-[10px] mt-0.5">دسته‌بندی: {p.category || 'عمومی'} | سازگار با: {(Array.isArray(p.compatibility) ? p.compatibility : []).join('، ')}</p>
-                        <p className="text-slate-400 text-[9.5px] font-normal leading-relaxed text-right mt-1 font-mono">{p.description}</p>
-                        <div className="flex items-center gap-3 mt-1.5 text-[10px]">
-                          <span className="text-slate-500">قیمت فعال: <strong className="text-slate-805 font-mono">{p.price.toLocaleString('fa-IR')}</strong> ت</span>
-                          <span className="text-slate-350">|</span>
-                          <span className={p.stock > 5 ? 'text-emerald-600 font-extrabold' : 'text-rose-500 font-bold'}>موجودی فعال: {p.stock} عدد</span>
-                        </div>
-                      </div>
-                    </div>
+                {filteredSpareParts.map((p) => {
+                  const compStr = p.compatible_brands || (Array.isArray(p.compatibility) ? p.compatibility.join('، ') : (p.brand || ''));
+                  const shortDesc = p.short_description || p.description || p.technical_description || '';
+                  const devCat = p.device_category || p.category || 'عمومی';
+                  const modelName = p.model || p.device_model || '';
 
-                    {editingPartId === p.id ? (
-                      <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl flex items-center gap-3 self-stretch sm:self-auto justify-between sm:justify-start">
-                        <div className="flex gap-2 text-right">
-                          <div className="w-24">
-                            <label className="text-[9px] text-slate-400 block mb-0.5 font-bold">قیمت (تومان)</label>
-                            <input
-                              type="number"
-                              value={tempPrice}
-                              onChange={(e) => setTempPrice(Number(e.target.value))}
-                              className="bg-white border border-slate-250 p-1 rounded-lg text-xs w-full font-mono text-center"
-                            />
+                  return (
+                    <div key={p.id} className="bg-white border border-slate-200 hover:border-slate-300 rounded-3xl p-5 flex flex-col justify-between gap-4 text-right shadow-3xs transition-all duration-150">
+                      <div className="flex items-start gap-3">
+                        <img
+                          src={p.image || p.image_url || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f1f5f9'/><text x='50' y='55' font-size='28' text-anchor='middle'>⚙️</text></svg>"}
+                          alt={p.name}
+                          className="w-14 h-14 rounded-2xl object-cover bg-slate-50 border border-slate-100 flex-shrink-0 mt-0.5"
+                        />
+                        <div className="space-y-1 w-full">
+                          <h4 className="font-extrabold text-slate-900 text-xs">{p.name || p.title}</h4>
+                          <div className="text-[10px] text-slate-500 flex flex-wrap gap-x-2 gap-y-0.5 font-medium">
+                            <span>دسته‌بندی: <strong className="text-slate-700">{devCat}</strong></span>
+                            {modelName && <span>| مدل: <strong className="text-slate-700">{modelName}</strong></span>}
                           </div>
-                          <div className="w-16">
-                            <label className="text-[9px] text-slate-400 block mb-0.5 font-bold">موجودی</label>
-                            <input
-                              type="number"
-                              value={tempStock}
-                              onChange={(e) => setTempStock(Number(e.target.value))}
-                              className="bg-white border border-slate-250 p-1 rounded-lg text-xs w-full font-mono text-center"
-                            />
+                          {compStr && (
+                            <p className="text-[9.5px] text-blue-600 font-bold">
+                              سازگار با: <span className="text-slate-700 font-normal">{compStr}</span>
+                            </p>
+                          )}
+                          {shortDesc && (
+                            <p className="text-slate-500 text-[9.5px] font-normal leading-relaxed text-right line-clamp-2 mt-1">
+                              {shortDesc}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-3 pt-1.5 text-[10px]">
+                            <span className="text-slate-600 font-bold">قیمت: <strong className="text-emerald-700 font-mono font-extrabold">{p.price.toLocaleString('fa-IR')}</strong> ت</span>
+                            <span className="text-slate-300">|</span>
+                            <span className={p.stock > 5 ? 'text-emerald-600 font-extrabold' : 'text-rose-500 font-bold'}>موجودی: {p.stock} عدد</span>
                           </div>
                         </div>
-                        
-                        <div className="flex flex-col gap-1">
+                      </div>
+
+                      {editingPartId === p.id ? (
+                        <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl flex items-center gap-3 self-stretch sm:self-auto justify-between sm:justify-start">
+                          <div className="flex gap-2 text-right">
+                            <div className="w-24">
+                              <label className="text-[9px] text-slate-400 block mb-0.5 font-bold">قیمت (تومان)</label>
+                              <input
+                                type="number"
+                                value={tempPrice}
+                                onChange={(e) => setTempPrice(Number(e.target.value))}
+                                className="bg-white border border-slate-250 p-1 rounded-lg text-xs w-full font-mono text-center"
+                              />
+                            </div>
+                            <div className="w-16">
+                              <label className="text-[9px] text-slate-400 block mb-0.5 font-bold">موجودی</label>
+                              <input
+                                type="number"
+                                value={tempStock}
+                                onChange={(e) => setTempStock(Number(e.target.value))}
+                                className="bg-white border border-slate-250 p-1 rounded-lg text-xs w-full font-mono text-center"
+                              />
+                            </div>
+                          </div>
+                          
+                          <div className="flex flex-col gap-1">
+                            <button
+                              onClick={() => handleSavePartChanges(p.id)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white rounded p-1.5 text-xs font-bold cursor-pointer transition-all"
+                              title="ذخیره تغییرات مستقیم"
+                            >
+                              ✓
+                            </button>
+                            <button
+                              onClick={() => setEditingPartId(null)}
+                              className="bg-slate-300 text-slate-600 rounded p-1.5 text-xs cursor-pointer transition-all"
+                              title="انصراف"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 self-stretch sm:self-auto justify-end border-t border-slate-100 pt-3">
                           <button
-                            onClick={() => handleSavePartChanges(p.id)}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white rounded p-1.5 text-xs font-bold cursor-pointer transition-all"
-                            title="ذخیره تغییرات مستقیم"
+                            id={`edit-full-${p.id}`}
+                            onClick={() => handleOpenEditFullPart(p)}
+                            className="bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10.5px] font-extrabold py-1.5 px-3 rounded-xl border border-blue-200 transition-all cursor-pointer"
                           >
-                            ✓
+                            ویرایش قطعه
                           </button>
                           <button
-                            onClick={() => setEditingPartId(null)}
-                            className="bg-slate-300 text-slate-600 rounded p-1.5 text-xs cursor-pointer transition-all"
-                            title="انصراف"
+                            id={`edit-stock-${p.id}`}
+                            onClick={() => handleStartEditPart(p)}
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10.5px] font-extrabold py-1.5 px-3 rounded-xl border border-slate-200 transition-all cursor-pointer"
                           >
-                            ✕
+                            قیمت و انبار
+                          </button>
+                          <button
+                            onClick={() => handleDeletePart(p.id)}
+                            className="p-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-100 hover:text-rose-700 transition-all cursor-pointer"
+                            title="حذف قطعه از پایگاه داده فروشگاه"
+                          >
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 self-stretch sm:self-auto justify-end">
-                        <button
-                          id={`edit-stock-${p.id}`}
-                          onClick={() => handleStartEditPart(p)}
-                          className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-extrabold py-1.5 px-3.5 rounded-xl border border-slate-200 transition-all cursor-pointer"
-                        >
-                          ویرایش قیمت و انبار
-                        </button>
-                        <button
-                          onClick={() => handleDeletePart(p.id)}
-                          className="p-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-100 hover:text-rose-700 transition-all cursor-pointer"
-                          title="حذف قطعه از پایگاه داده فروشگاه"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

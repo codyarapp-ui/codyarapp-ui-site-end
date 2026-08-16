@@ -86,13 +86,26 @@ export interface SparePart {
   name?: string;
   title?: string;
   category?: string;
+  device_category?: string;
   brand?: string;
   model?: string;
+  device_model?: string;
+  compatible_brands?: string;
+  compatibility?: string[];
+  compatibleModels?: string[];
+  compatible_models?: string[];
   price?: number;
   stock?: number;
   image_url?: string;
   image?: string;
   description?: string;
+  short_description?: string;
+  technical_description?: string;
+  code?: string;
+  partNumber?: string;
+  part_number?: string;
+  status?: string;
+  created_at?: string;
   [key: string]: any;
 }
 

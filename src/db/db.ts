@@ -123,6 +123,10 @@ export async function ensureDatabaseSchema(): Promise<void> {
 
     await safeAddColumn('spare_parts', 'part_number VARCHAR(100) DEFAULT ""');
     await safeAddColumn('spare_parts', 'brand VARCHAR(100) DEFAULT ""');
+    await safeAddColumn('spare_parts', 'model VARCHAR(100) DEFAULT ""');
+    await safeAddColumn('spare_parts', 'device_category VARCHAR(100) DEFAULT ""');
+    await safeAddColumn('spare_parts', 'compatible_brands TEXT NULL');
+    await safeAddColumn('spare_parts', 'short_description TEXT NULL');
     await safeAddColumn('spare_parts', 'image_url TEXT NULL');
     await safeAddColumn('spare_parts', 'compatible_models JSON NULL');
     await safeAddColumn('spare_parts', 'code VARCHAR(100) DEFAULT ""');
