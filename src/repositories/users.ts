@@ -11,6 +11,9 @@ function formatUserRow(row: any): any {
     role: row.role || "user",
     isSuperAdmin: row.is_super_admin !== 0 && row.is_super_admin !== false && row.is_super_admin !== "0" && row.is_super_admin !== undefined,
     is_super_admin: row.is_super_admin !== 0 && row.is_super_admin !== false && row.is_super_admin !== "0" && row.is_super_admin !== undefined ? 1 : 0,
+    is_premium: row.is_premium === 1 || row.is_premium === true || row.is_premium === "1" || false,
+    subscription_plan: row.subscription_plan || "",
+    subscription_expire_date: row.subscription_expire_date || "",
     city: row.city || "",
     address: row.address || "",
     walletBalance: Number(row.wallet_balance || row.walletBalance || 0),
@@ -88,6 +91,19 @@ export const UserRepository = {
     if (updates.wallet_balance !== undefined || updates.walletBalance !== undefined) {
       fields.push("wallet_balance = ?");
       values.push(updates.wallet_balance ?? updates.walletBalance);
+    }
+    if (updates.is_premium !== undefined || updates.isPremium !== undefined) {
+      fields.push("is_premium = ?");
+      const ip = updates.is_premium ?? updates.isPremium;
+      values.push(ip ? 1 : 0);
+    }
+    if (updates.subscription_plan !== undefined || updates.subscriptionPlan !== undefined) {
+      fields.push("subscription_plan = ?");
+      values.push(updates.subscription_plan ?? updates.subscriptionPlan);
+    }
+    if (updates.subscription_expire_date !== undefined || updates.subscriptionExpireDate !== undefined) {
+      fields.push("subscription_expire_date = ?");
+      values.push(updates.subscription_expire_date ?? updates.subscriptionExpireDate);
     }
 
     if (fields.length > 0) {

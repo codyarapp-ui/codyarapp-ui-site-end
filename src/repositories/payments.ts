@@ -115,20 +115,55 @@ export const PaymentRepository = {
   },
 
   async create(payData: any): Promise<any> {
+    const pool = getDbPool();
     const id = payData.id || `pay_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const userId = payData.user_id || payData.userId || null;
-    const orderId = payData.order_id || payData.orderId || null;
-    const relatedType = payData.related_type || payData.relatedType || payData.type || (payData.partId || payData.type === 'part_purchase' ? "part_purchase" : "subscription");
-    const relatedId = payData.related_id || payData.relatedId || payData.partId || payData.plan || null;
+    let userId = payData.user_id || payData.userId || null;
+    let orderId = payData.order_id || payData.orderId || null;
+    const isPart = payData.related_type === 'part_purchase' || payData.relatedType === 'part_purchase' || payData.type === 'part_purchase' || !!(payData.partId || payData.part_id);
+    const relatedType = isPart ? "part_purchase" : "subscription";
+    const relatedId = payData.related_id || payData.relatedId || payData.partId || payData.part_id || payData.plan || null;
     const amount = Number(payData.amount || payData.price) || 0;
-    const authority = payData.authority || payData.ref_id || `AUTH_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const refId = payData.ref_id || payData.refId || payData.trackNumber || null;
+    const authority = payData.authority || `CARD_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const refId = payData.ref_id || payData.refId || payData.trackNumber || "";
     const refCode = payData.ref_code || payData.refCode || payData.trackNumber || "";
     const cardNumber = payData.card_number || payData.cardNumber || payData.cardHolder || "";
     const status = payData.status || "pending";
     const paymentMethod = payData.payment_method || payData.paymentMethod || "card_to_card";
 
-    const pool = getDbPool();
+    // Validate FK userId to prevent MySQL fk_pay_user constraint failure
+    if (userId) {
+      try {
+        const [uRows]: any = await pool.query("SELECT id FROM users WHERE id = ?", [userId]);
+        if (!uRows || uRows.length === 0) {
+          const [uPhoneRows]: any = await pool.query("SELECT id FROM users WHERE phone = ?", [userId]);
+          if (uPhoneRows && uPhoneRows.length > 0) {
+            userId = uPhoneRows[0].id;
+          } else {
+            const newPhone = String(userId).startsWith("09") ? userId : "09000000000";
+            await pool.query(
+              "INSERT INTO users (id, phone, full_name, role, status) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id=id",
+              [userId, newPhone, cardNumber || "کاربر", "client", "active"]
+            ).catch(() => { userId = null; });
+          }
+        }
+      } catch {
+        userId = null;
+      }
+    }
+
+    // Validate FK orderId against orders table (orders table is ONLY for technician orders)
+    // If orderId belongs to a part_order (po_...), it must NOT be inserted into fk_pay_order!
+    if (orderId) {
+      try {
+        const [ordRows]: any = await pool.query("SELECT id FROM orders WHERE id = ?", [orderId]);
+        if (!ordRows || ordRows.length === 0) {
+          orderId = null;
+        }
+      } catch {
+        orderId = null;
+      }
+    }
+
     await pool.query(
       `INSERT INTO payments (id, user_id, order_id, related_type, related_id, amount, authority, ref_id, ref_code, card_number, status, payment_method)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

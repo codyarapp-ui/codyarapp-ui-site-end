@@ -395,9 +395,91 @@ export default function App() {
   });
   const [smsLogs, setSmsLogs] = useState<any[]>([]);
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
-  const [usersList, setUsersList] = useState<any[]>([]);
-  const [subscriptionsList, setSubscriptionsList] = useState<any[]>([]);
-  const [paymentsList, setPaymentsList] = useState<any[]>([]);
+const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
+  const plansList = [
+    { id: "1_month", name: "اشتراک ۱ ماهه کدهای خطا", duration_days: 30 },
+    { id: "3_month", name: "اشتراک ۳ ماهه کدهای خطا", duration_days: 90 },
+    { id: "6_month", name: "اشتراک ۶ ماهه کدهای خطا", duration_days: 180 },
+    { id: "12_month", name: "اشتراک ۱۲ ماهه کدهای خطا", duration_days: 365 },
+    { id: "permanent", name: "اشتراک دائمی همکار / مدیریت", duration_days: 36500 }
+  ];
+
+  const resultSubs = Array.isArray(subs) ? [...subs] : [];
+  const existingSubIds = new Set(resultSubs.map(s => String(s.id)));
+  const existingPayIds = new Set(resultSubs.map(s => String(s.payment_id || s.paymentId)).filter(Boolean));
+
+  if (Array.isArray(payments)) {
+    for (const pay of payments) {
+      if (pay && (pay.status === 'completed' || pay.status === 'confirmed')) {
+        const isSubPay = pay.type === 'subscription' || pay.related_type === 'subscription' || (pay.related_id && (String(pay.related_id).includes('month') || pay.related_id === 'permanent')) || (pay.plan && !pay.partId);
+        if (isSubPay) {
+          const subId = `sub_pay_${pay.id}`;
+          const planKey = pay.plan || pay.related_id || "1_month";
+          const matchedPlan = plansList.find(p => p.id === planKey) || {
+            id: planKey,
+            name: String(planKey).includes("12") ? "اشتراک ۱۲ ماهه کدهای خطا" : String(planKey).includes("6") ? "اشتراک ۶ ماهه کدهای خطا" : String(planKey).includes("3") ? "اشتراک ۳ ماهه کدهای خطا" : "اشتراک ۱ ماهه کدهای خطا",
+            duration_days: String(planKey).includes("12") ? 365 : String(planKey).includes("6") ? 180 : String(planKey).includes("3") ? 90 : 30
+          };
+
+          const hasMatchingSub = existingSubIds.has(subId) || existingPayIds.has(String(pay.id)) || resultSubs.some(s => (String(s.user_id) === String(pay.user_id) || String(s.userId) === String(pay.user_id)) && (s.plan_id === planKey || s.plan === planKey));
+
+          if (!hasMatchingSub) {
+            const startDate = pay.created_at || new Date().toISOString();
+            const expDate = new Date(new Date(startDate).getTime() + (matchedPlan.duration_days || 30) * 24 * 60 * 60 * 1000).toISOString();
+            const autoSub = {
+              id: subId,
+              user_id: pay.user_id || pay.user_phone || "usr_client",
+              userId: pay.user_id || pay.user_phone || "usr_client",
+              plan_id: matchedPlan.id,
+              plan_name: matchedPlan.name,
+              planName: matchedPlan.name,
+              plan: matchedPlan.id,
+              payment_id: pay.id,
+              start_date: startDate,
+              end_date: expDate,
+              expiry_date: expDate,
+              status: 'active',
+              is_active: true,
+              is_premium: true
+            };
+            resultSubs.push(autoSub);
+            existingSubIds.add(subId);
+            existingPayIds.add(String(pay.id));
+          }
+        }
+      }
+    }
+  }
+  return resultSubs;
+};
+
+  const [usersList, setUsersList] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('ir_users');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [paymentsList, setPaymentsList] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('ir_payments');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [subscriptionsList, setSubscriptionsList] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('ir_subscriptions');
+      const savedSubs = saved ? JSON.parse(saved) : [];
+      const savedPays = localStorage.getItem('ir_payments');
+      const parsedPays = savedPays ? JSON.parse(savedPays) : [];
+      return reconcileSubscriptionsWithPayments(savedSubs, parsedPays);
+    } catch {
+      return [];
+    }
+  });
   
   const [adminAnnouncement, setAdminAnnouncement] = useState<{
     text: string;
@@ -646,8 +728,16 @@ export default function App() {
       });
       const data = await response.json();
       if (response.ok && data.status === 'ok') {
-        localStorage.setItem('session_user_id', String(data.user.id));
-        setCurrentUser(data.user);
+        const userObj = data.user || {
+          id: 'us_admin_root',
+          full_name: 'مدیر کل پلتفرم',
+          name: 'مدیر کل پلتفرم',
+          role: 'admin',
+          phone: '09120000000',
+          is_super_admin: true
+        };
+        localStorage.setItem('session_user_id', String(userObj.id));
+        setCurrentUser(userObj);
         setCurrentRole('admin');
         setRoleSelection('admin');
         setIsAdminLoginModalOpen(false);
@@ -1117,25 +1207,42 @@ export default function App() {
         }
       }
 
+      let loadedSubs: any[] = [];
+      let loadedPayments: any[] = [];
+
       if (subsRes.status === 'fulfilled' && subsRes.value.ok) {
         const json = await subsRes.value.json();
-        if (json.subscriptions) {
-          setSubscriptionsList(json.subscriptions);
+        const items = json.subscriptions || json.data;
+        if (Array.isArray(items)) {
+          loadedSubs = items;
         }
       }
 
       if (paymentsRes.status === 'fulfilled' && paymentsRes.value.ok) {
         const json = await paymentsRes.value.json();
-        if (json.payments) {
-          setPaymentsList(json.payments);
+        const items = json.payments || json.data;
+        if (Array.isArray(items)) {
+          loadedPayments = items;
+          setPaymentsList(items);
+          localStorage.setItem('ir_payments', JSON.stringify(items));
         }
       }
 
+      const localSavedSubs = JSON.parse(localStorage.getItem('ir_subscriptions') || '[]');
+      const localSavedPays = JSON.parse(localStorage.getItem('ir_payments') || '[]');
+      const finalSubsSource = loadedSubs.length > 0 ? loadedSubs : localSavedSubs;
+      const finalPaysSource = loadedPayments.length > 0 ? loadedPayments : localSavedPays;
+      const reconciledSubs = reconcileSubscriptionsWithPayments(finalSubsSource, finalPaysSource);
+
+      setSubscriptionsList(reconciledSubs);
+      localStorage.setItem('ir_subscriptions', JSON.stringify(reconciledSubs));
+
       if (partOrdersRes.status === 'fulfilled' && partOrdersRes.value.ok) {
         const json = await partOrdersRes.value.json();
-        const items = json.partPurchases || json.partOrders;
+        const items = json.partPurchases || json.partOrders || json.data;
         if (items) {
           setPartPurchases(items);
+          localStorage.setItem('ir_purchases', JSON.stringify(items));
         }
       }
 
@@ -1240,6 +1347,9 @@ export default function App() {
       const localOrders = localStorage.getItem('ir_orders');
       const localParts = localStorage.getItem('ir_parts');
       const localUsers = localStorage.getItem('ir_users');
+      const localSubs = localStorage.getItem('ir_subscriptions');
+      const localPayments = localStorage.getItem('ir_payments');
+      const localPurchases = localStorage.getItem('ir_purchases');
 
       setErrorCodes(localErrors ? JSON.parse(localErrors) : INITIAL_ERROR_CODES);
       setCommonProblems(localProblems ? JSON.parse(localProblems) : INITIAL_COMMON_PROBLEMS);
@@ -1248,6 +1358,17 @@ export default function App() {
       setSpareParts(localParts ? JSON.parse(localParts) : INITIAL_SPARE_PARTS);
       if (localUsers) {
         setUsersList(JSON.parse(localUsers));
+      }
+      if (localPayments) {
+        setPaymentsList(JSON.parse(localPayments));
+      }
+      const parsedLocalSubs = localSubs ? JSON.parse(localSubs) : [];
+      const parsedLocalPays = localPayments ? JSON.parse(localPayments) : [];
+      const reconciledFallbackSubs = reconcileSubscriptionsWithPayments(parsedLocalSubs, parsedLocalPays);
+      setSubscriptionsList(reconciledFallbackSubs);
+      localStorage.setItem('ir_subscriptions', JSON.stringify(reconciledFallbackSubs));
+      if (localPurchases) {
+        setPartPurchases(JSON.parse(localPurchases));
       }
 
       const localCities = localStorage.getItem('ir_cities');
@@ -1961,6 +2082,14 @@ export default function App() {
           card_holder: cardHolder,
           track_number: trackNumber,
           product_id: part.id,
+          part_id: part.id,
+          part_name: part.name,
+          buyer_name: buyerName || currentUser?.full_name || 'کاربر',
+          buyer_phone: buyerPhone || currentUser?.phone || '',
+          address: address || '',
+          user_id: currentUser?.id || null,
+          user_phone: currentUser?.phone || buyerPhone || '',
+          phone: buyerPhone || currentUser?.phone || '',
           type: 'part_purchase',
           amount: part.price
         })
@@ -1968,27 +2097,37 @@ export default function App() {
       const data = await response.json();
 
       if (!response.ok || data.status !== 'ok') {
-        triggerNotification('ثبت ناموفق', data.error || 'ثبت اطلاعات فیش پرداخت با خطا مواجه شد.', 'error');
+        triggerNotification('ثبت ناموفق', data.error || data.message || 'ثبت اطلاعات فیش پرداخت با خطا مواجه شد.', 'error');
         return;
       }
 
+      const generatedId = data.partOrder?.id || data.order?.id || `PUR-${Math.floor(100000 + Math.random() * 900000)}`;
       const newPurchase: PartPurchase = {
-        id: `PUR-${Math.floor(100000 + Math.random() * 900000)}`,
+        id: generatedId,
         partId: part.id,
+        part_id: part.id,
         partName: part.name,
+        part_name: part.name,
         partCategory: part.category,
-        customerName: buyerName || 'مشتری ناشناس',
-        customerPhone: buyerPhone || '09121111111',
+        customerName: buyerName || currentUser?.full_name || 'مشتری',
+        buyer_name: buyerName || currentUser?.full_name || 'مشتری',
+        customerPhone: buyerPhone || currentUser?.phone || '',
+        buyer_phone: buyerPhone || currentUser?.phone || '',
         customerAddress: address,
+        address: address,
         price: part.price,
+        total_price: part.price,
         date: new Date().toLocaleDateString('fa-IR'),
-        status: 'pending_payment',
+        status: 'pending',
         cardHolder,
-        trackNumber
+        trackNumber,
+        shipping_tracking_code: trackNumber,
+        user_id: currentUser?.id || null,
+        userId: currentUser?.id || null
       };
 
       if (data.payment) {
-        setPaymentsList(prev => [data.payment, ...prev]);
+        setPaymentsList(prev => [data.payment, ...prev.filter(p => p.id !== data.payment.id)]);
       } else {
         const newPayRecord = {
           id: `pay_${Date.now()}`,
@@ -2001,22 +2140,23 @@ export default function App() {
           partName: part.name,
           amount: part.price,
           ref_id: trackNumber,
-          ref_code: trackNumber,
+          ref_code: generatedId,
           card_number: cardHolder,
-          status: 'pending_payment',
+          status: 'pending',
           payment_method: 'card_to_card',
           created_at: new Date().toISOString()
         };
         setPaymentsList(prev => [newPayRecord, ...prev]);
       }
 
-      const updatedPurchases = [newPurchase, ...partPurchases];
+      const updatedPurchases = [newPurchase, ...partPurchases.filter(p => p.id !== newPurchase.id)];
+      setPartPurchases(updatedPurchases);
       savePurchasesToStorage(updatedPurchases);
 
       triggerNotification(
         'ثبت درخواست خرید قطعه',
-        `اطلاعات فیش پرداخت "${part.name}" ثبت شد و در انتظار تایید واحد مالی است.`,
-        'info'
+        `اطلاعات فیش پرداخت "${part.name}" با موفقیت ثبت شد و به تب پرداخت‌های مدیریت ارسال گردید.`,
+        'success'
       );
     } catch (err) {
       triggerNotification('خطای اتصال', 'امکان ارتباط با سرور برای ثبت پرداخت وجود ندارد.', 'error');
@@ -2508,18 +2648,23 @@ export default function App() {
     };
 
     // 1. If it's a part purchase
-    if (payment.type === 'part_purchase' || payment.partId) {
+    if (payment.type === 'part_purchase' || payment.related_type === 'part_purchase' || payment.partId || payment.related_id) {
+      const targetPartId = payment.partId || payment.related_id;
       const updatedParts = spareParts.map(p =>
-        p.id === payment.partId ? { ...p, stock: Math.max(0, p.stock - 1) } : p
+        p.id === targetPartId ? { ...p, stock: Math.max(0, p.stock - 1) } : p
       );
-      const updatedPurchases = partPurchases.map(pp =>
-        (pp.trackNumber === payment.ref_id || pp.id === payment.partId || pp.id === payment.id)
-          ? { ...pp, status: 'shipped' as const }
-          : pp
-      );
+      const updatedPurchases = partPurchases.map(pp => {
+        const isMatch = (payment.ref_id && (pp.trackNumber === payment.ref_id || pp.shipping_tracking_code === payment.ref_id)) ||
+                        (payment.ref_code && (pp.id === payment.ref_code || pp.orderId === payment.ref_code)) ||
+                        (payment.order_id && pp.id === payment.order_id) ||
+                        (pp.id === payment.id) ||
+                        (targetPartId && (pp.partId === targetPartId || pp.part_id === targetPartId) && (pp.status === 'pending' || pp.status === 'pending_payment'));
+        return isMatch ? { ...pp, status: 'confirmed' as const } : pp;
+      });
 
       setSpareParts(updatedParts);
       setPartPurchases(updatedPurchases);
+      savePurchasesToStorage(updatedPurchases);
       setPaymentsList(updatedPayments);
 
       try {
@@ -2539,9 +2684,9 @@ export default function App() {
       });
 
       if (success) {
-        triggerNotification('تایید پرداخت قطعه', 'فیش پرداخت تایید شد و وضعیت ارسال سفارش بروزرسانی گردید.', 'success');
+        triggerNotification('تایید پرداخت قطعه', 'فیش پرداخت قطعه تایید شد و وضعیت سفارش به "تایید شده (آماده ارسال)" تغییر یافت.', 'success');
         
-        const customerPhone = payment.customerPhone || payment.user_phone;
+        const customerPhone = payment.customerPhone || payment.user_phone || payment.phone;
         if (customerPhone) {
           dispatchSmsNotification(
             customerPhone,
@@ -2563,8 +2708,16 @@ export default function App() {
     const planKey = payment.plan || payment.related_id || "1_month";
     const selectedPlan = plansList.find(pl => pl.id === planKey) || plansList[0];
     
+    let userTargetId = payment.user_id || payment.user_phone;
+    if (!userTargetId && payment.card_number && String(payment.card_number).startsWith("09")) {
+      userTargetId = payment.card_number;
+    }
+    if (!userTargetId) {
+      userTargetId = `us_pay_${payment.id}`;
+    }
+
     const activeSub = subscriptionsList
-      .filter((s: any) => (s.user_id === payment.user_id || s.userId === payment.user_id) && (s.is_active || s.status === 'active'))
+      .filter((s: any) => (s.user_id === userTargetId || s.userId === userTargetId) && (s.is_active || s.status === 'active'))
       .sort((a: any, b: any) => new Date(b.expiry_date || b.end_date || 0).getTime() - new Date(a.expiry_date || a.end_date || 0).getTime())[0];
 
     let baseTime = activeSub && new Date(activeSub.expiry_date || activeSub.end_date) > new Date() ? new Date(activeSub.expiry_date || activeSub.end_date) : new Date();
@@ -2573,10 +2726,12 @@ export default function App() {
     
     let newSub = {
       id: `sub_card_${Date.now()}`,
-      user_id: payment.user_id,
+      user_id: userTargetId,
+      userId: userTargetId,
       plan_id: selectedPlan.id,
       plan_name: selectedPlan.name,
       planName: selectedPlan.name,
+      payment_id: payment.id,
       start_date: new Date().toISOString(),
       end_date: newExpiryDateStr,
       expiry_date: newExpiryDateStr,
@@ -2624,6 +2779,9 @@ export default function App() {
     
     setPaymentsList(updatedPayments);
     setSubscriptionsList(updatedSubList);
+    localStorage.setItem('ir_payments', JSON.stringify(updatedPayments));
+    localStorage.setItem('ir_subscriptions', JSON.stringify(updatedSubList));
+    localStorage.setItem('ir_users', JSON.stringify(updatedUsers));
     
     const success = await syncWithBackend({
       payments: updatedPayments,
@@ -2657,11 +2815,18 @@ export default function App() {
       console.warn("Direct reject endpoint error:", e);
     }
 
-    if (payment.type === 'part_purchase') {
-      const updatedPurchases = partPurchases.map(pp =>
-        pp.trackNumber === payment.ref_id ? { ...pp, status: 'rejected' as const } : pp
-      );
+    if (payment.type === 'part_purchase' || payment.related_type === 'part_purchase' || payment.partId || payment.related_id) {
+      const targetPartId = payment.partId || payment.related_id;
+      const updatedPurchases = partPurchases.map(pp => {
+        const isMatch = (payment.ref_id && (pp.trackNumber === payment.ref_id || pp.shipping_tracking_code === payment.ref_id)) ||
+                        (payment.ref_code && (pp.id === payment.ref_code || pp.orderId === payment.ref_code)) ||
+                        (payment.order_id && pp.id === payment.order_id) ||
+                        (pp.id === payment.id) ||
+                        (targetPartId && (pp.partId === targetPartId || pp.part_id === targetPartId) && (pp.status === 'pending' || pp.status === 'pending_payment'));
+        return isMatch ? { ...pp, status: 'rejected' as const } : pp;
+      });
       setPartPurchases(updatedPurchases);
+      savePurchasesToStorage(updatedPurchases);
       setPaymentsList(updatedPayments);
       const success = await syncWithBackend({
         payments: updatedPayments,
@@ -2769,6 +2934,8 @@ export default function App() {
 
     const updatedPayments = [newPayment, ...paymentsList];
     setPaymentsList(updatedPayments);
+    localStorage.setItem('ir_payments', JSON.stringify(updatedPayments));
+    localStorage.setItem('ir_subscriptions', JSON.stringify(updatedSubList));
 
     const success = await syncWithBackend({
       subscriptions: updatedSubList,

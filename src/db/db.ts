@@ -105,6 +105,10 @@ export async function ensureDatabaseSchema(): Promise<void> {
       }
     };
 
+    await safeAddColumn('users', 'is_premium TINYINT(1) DEFAULT 0');
+    await safeAddColumn('users', 'subscription_plan VARCHAR(100) DEFAULT ""');
+    await safeAddColumn('users', 'subscription_expire_date VARCHAR(100) DEFAULT ""');
+
     await safeAddColumn('error_codes', 'is_approved TINYINT(1) DEFAULT 1');
     await safeAddColumn('error_codes', 'submitted_by VARCHAR(100) DEFAULT ""');
     await safeAddColumn('error_codes', 'submitted_at VARCHAR(100) DEFAULT ""');
@@ -1019,6 +1023,23 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
           created_at: ord.created_at
         }));
         u.orders = u.repair_requests;
+
+        const isPremiumUser = !!(
+          u.has_active_subscription ||
+          u.is_premium === 1 ||
+          u.is_premium === true ||
+          u.is_premium === "1" ||
+          u.isSuperAdmin ||
+          u.is_super_admin ||
+          u.role === "admin"
+        );
+
+        u.is_premium = isPremiumUser;
+        u.isPremium = isPremiumUser;
+        u.subscription_plan = u.subscription?.plan || u.subscription_plan || (isPremiumUser ? 'sub_1_month' : '');
+        u.subscription_expire_date = u.subscription?.expiry_date 
+          ? (u.subscription.expiry_date.includes('T') ? u.subscription.expiry_date.split('T')[0] : u.subscription.expiry_date)
+          : (u.subscription_expire_date || '');
       } catch (e) {
         console.warn("[getCurrentUserAsync] Sub/Pay/Orders fetch error:", e);
       }
@@ -1093,6 +1114,10 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
         isVerified: tech.status === "active",
         subscription: techSub,
         has_active_subscription: hasActiveSub,
+        is_premium: true,
+        isPremium: true,
+        subscription_plan: "sub_permanent",
+        subscription_expire_date: "2099-12-31",
         payments: techPayments
       });
     }

@@ -91,29 +91,43 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
       currentUser.part_purchases.forEach((p: any) => {
         map.set(p.id, {
           id: p.id,
-          partName: p.partName,
-          partCategory: p.partCategory,
-          price: p.price,
-          date: p.date,
+          partName: p.partName || p.part_name || 'قطعه یدکی',
+          partCategory: p.partCategory || p.part_category || 'قطعات',
+          price: Number(p.price || p.total_price || 0),
+          date: p.date || (p.created_at ? new Date(p.created_at).toLocaleDateString('fa-IR') : 'نامعلوم'),
           status: p.status || 'pending',
-          postalTrackingCode: p.postalTrackingCode || p.trackNumber || ''
+          postalTrackingCode: p.postalTrackingCode || p.shipping_tracking_code || p.trackNumber || ''
         });
       });
     }
 
-    // 2. Add local frontend state part purchases matching user phone
-    const myUserPhone = toEnglishNumber(currentUser.phone || '').replace(/[^\d]/g, '');
+    // 2. Add local frontend state part purchases matching user phone or ID
+    const normalizeDigits = (p?: string) => {
+      if (!p) return '';
+      let str = toEnglishNumber(String(p)).replace(/[^\d]/g, '');
+      if (str.startsWith('0098')) str = '0' + str.slice(4);
+      if (str.startsWith('98') && str.length > 10) str = '0' + str.slice(2);
+      if (str.length === 10 && str.startsWith('9')) str = '0' + str;
+      return str;
+    };
+
+    const myUserPhone = normalizeDigits(currentUser.phone);
+    const myUserId = String(currentUser.id || '');
+
     partPurchases.forEach((p: any) => {
-      const pPhone = toEnglishNumber(p.customerPhone || '').replace(/[^\d]/g, '');
-      if (pPhone === myUserPhone) {
+      const pPhone = normalizeDigits(p.customerPhone || p.buyerPhone || p.buyer_phone || p.phone);
+      const isMatch = (myUserPhone && pPhone && myUserPhone === pPhone) ||
+                      (myUserId && (String(p.user_id || p.userId) === myUserId));
+
+      if (isMatch) {
         map.set(p.id, {
           id: p.id,
-          partName: p.partName,
-          partCategory: p.partCategory,
-          price: p.price,
-          date: p.date,
+          partName: p.partName || p.part_name || 'قطعه یدکی',
+          partCategory: p.partCategory || p.part_category || 'قطعات',
+          price: Number(p.price || p.total_price || 0),
+          date: p.date || new Date().toLocaleDateString('fa-IR'),
           status: p.status || 'pending',
-          postalTrackingCode: p.postalTrackingCode || p.trackNumber || ''
+          postalTrackingCode: p.postalTrackingCode || p.shipping_tracking_code || p.trackNumber || ''
         });
       }
     });
@@ -660,7 +674,13 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
           body: JSON.stringify({
             product_id: plan.id,
             card_holder: cardHolderName,
-            track_number: cardTrackNumber
+            track_number: cardTrackNumber,
+            user_id: currentUser?.id,
+            user_phone: currentUser?.phone,
+            phone: currentUser?.phone,
+            buyer_phone: currentUser?.phone,
+            type: 'subscription',
+            amount: plan.price
           })
         });
         const data = await response.json();

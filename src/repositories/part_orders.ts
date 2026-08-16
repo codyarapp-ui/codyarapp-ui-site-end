@@ -82,18 +82,54 @@ export const PartOrderRepository = {
   },
 
   async create(poData: any): Promise<any> {
+    const pool = getDbPool();
     const id = poData.id || `po_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const userId = poData.user_id || poData.userId || null;
-    const partId = poData.part_id || poData.partId || null;
-    const buyerName = poData.buyer_name || poData.customerName || "";
+    let userId = poData.user_id || poData.userId || null;
+    let partId = poData.part_id || poData.partId || null;
+    const buyerName = poData.buyer_name || poData.customerName || poData.card_holder || "مشتری";
     const buyerPhone = poData.buyer_phone || poData.customerPhone || "";
     const address = poData.address || poData.customerAddress || "";
     const quantity = Number(poData.quantity) || 1;
-    const totalPrice = Number(poData.total_price || poData.totalPrice || poData.price) || 0;
+    const totalPrice = Number(poData.total_price || poData.totalPrice || poData.price || poData.amount) || 0;
     const status = poData.status || "pending";
     const trackNumber = poData.shipping_tracking_code || poData.trackNumber || "";
 
-    const pool = getDbPool();
+    // Validate FK userId to prevent ER_NO_REFERENCED_ROW_2
+    if (userId) {
+      try {
+        const [uRows]: any = await pool.query("SELECT id FROM users WHERE id = ?", [userId]);
+        if (!uRows || uRows.length === 0) {
+          if (buyerPhone) {
+            const [uP]: any = await pool.query("SELECT id FROM users WHERE phone = ?", [buyerPhone]);
+            if (uP && uP.length > 0) {
+              userId = uP[0].id;
+            } else {
+              await pool.query(
+                "INSERT INTO users (id, phone, full_name, role, status) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id=id",
+                [userId, buyerPhone, buyerName, "client", "active"]
+              ).catch(() => { userId = null; });
+            }
+          } else {
+            userId = null;
+          }
+        }
+      } catch {
+        userId = null;
+      }
+    }
+
+    // Validate FK partId to prevent ER_NO_REFERENCED_ROW_2
+    if (partId) {
+      try {
+        const [spRows]: any = await pool.query("SELECT id FROM spare_parts WHERE id = ?", [partId]);
+        if (!spRows || spRows.length === 0) {
+          partId = null;
+        }
+      } catch {
+        partId = null;
+      }
+    }
+
     await pool.query(
       `INSERT INTO part_orders (id, user_id, part_id, buyer_name, buyer_phone, address, quantity, total_price, status, shipping_tracking_code)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

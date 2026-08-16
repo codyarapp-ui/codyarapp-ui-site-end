@@ -782,7 +782,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [subSearchVal, setSubSearchVal] = React.useState('');
   const [paySearchVal, setPaySearchVal] = React.useState('');
 
-  const filteredPurchases = partPurchases.filter(p => {
+  const approvedPurchases = React.useMemo(() => {
+    return (partPurchases || []).filter(p => p.status !== 'pending' && p.status !== 'pending_payment');
+  }, [partPurchases]);
+
+  const filteredPurchases = approvedPurchases.filter(p => {
     const query = purchaseSearch.toLowerCase();
     return (
       (p.id && p.id.toLowerCase().includes(query)) ||
@@ -3047,7 +3051,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           { id: 'errors', label: `ممیزی کدهای خطا (${pendingErrors.length})`, icon: <FileCheck className="w-4 h-4" /> },
           { id: 'techs', label: `تایید هویت تکنسین‌ها (${technicians.length})`, icon: <Users className="w-4 h-4" /> },
           { id: 'stocks', label: `انبار و قیمت قطعات (${spareParts.length})`, icon: <Layers className="w-4 h-4" /> },
-          { id: 'purchases', label: `سوابق خرید قطعات (${partPurchases.length})`, icon: <ShoppingBag className="w-4 h-4" /> },
+          { id: 'purchases', label: `سوابق خرید قطعات (${approvedPurchases.length})`, icon: <ShoppingBag className="w-4 h-4" /> },
           { id: 'users', label: `کاربران (${usersList.filter((u: any) => u.role !== 'technician').length})`, icon: <User className="w-4 h-4" /> },
           { id: 'subscriptions', label: `اشتراک‌ها (${subscriptionsList.length})`, icon: <FileText className="w-4 h-4" /> },
           { id: 'payments', label: `پرداخت‌ها (${paymentsList.length})`, icon: <DollarSign className="w-4 h-4" /> },
@@ -4932,23 +4936,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           {/* Quick Metrics for purchases */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-white border border-slate-200/80 rounded-2xl p-4 text-right shadow-xs">
-              <span className="text-[10px] text-slate-500 font-bold block mb-1">تعداد کل سفارشات قطعات</span>
-              <span className="font-black text-xl text-slate-900 font-sans">{partPurchases.length}</span>
-              <span className="text-[10px] text-teal-600 block mt-1">تراکنش‌های ثبت شده در انبار</span>
+              <span className="text-[10px] text-slate-500 font-bold block mb-1">تعداد کل سفارشات تایید شده</span>
+              <span className="font-black text-xl text-slate-900 font-sans">{approvedPurchases.length}</span>
+              <span className="text-[10px] text-teal-600 block mt-1">سفارشات قطعات تایید شده توسط مدیر</span>
             </div>
             <div className="bg-white border border-slate-200/80 rounded-2xl p-4 text-right shadow-xs">
-              <span className="text-[10px] text-slate-500 font-bold block mb-1">مجموع مبالغ درآمدی قطعات</span>
+              <span className="text-[10px] text-slate-500 font-bold block mb-1">مجموع مبالغ قطعات تایید شده</span>
               <span className="font-black text-xl text-emerald-600 font-sans">
-                {partPurchases.reduce((sum, p) => sum + (p.price || 0), 0).toLocaleString('fa-IR')} <span className="text-xs font-bold text-slate-500">تومان</span>
+                {approvedPurchases.reduce((sum, p) => sum + (p.price || 0), 0).toLocaleString('fa-IR')} <span className="text-xs font-bold text-slate-500">تومان</span>
               </span>
-              <span className="text-[10px] text-slate-400 block mt-1">مبلغ واریز شده به درگاه شتاب</span>
+              <span className="text-[10px] text-slate-400 block mt-1">مبالغ تایید و واریز شده</span>
             </div>
             <div className="bg-white border border-slate-200/80 rounded-2xl p-4 text-right shadow-xs">
-              <span className="text-[10px] text-slate-500 font-bold block mb-1">میزان در انتظار ارسال</span>
+              <span className="text-[10px] text-slate-500 font-bold block mb-1">در حال آماده‌سازی و ارسال</span>
               <span className="font-black text-xl text-amber-500 font-sans">
-                {partPurchases.filter(p => p.status === 'pending').length}
+                {approvedPurchases.filter(p => p.status === 'confirmed').length}
               </span>
-              <span className="text-[10px] text-amber-600 block mt-1">مرسوله‌های در انتظار پردازش پستی</span>
+              <span className="text-[10px] text-amber-600 block mt-1">مرسوله‌های تایید شده آماده صدور کد رهگیری</span>
             </div>
           </div>
 
@@ -5240,17 +5244,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <tbody className="divide-y divide-slate-100">
                     {subscriptionsList
                       .filter(s => {
-                        const q = subSearchVal.toLowerCase();
-                        const matchesQuery = (s.user_id || '').toLowerCase().includes(q) || (s.plan_name || '').toLowerCase().includes(q);
-                        
+                        const q = subSearchVal.toLowerCase().trim();
                         const userObj = usersList.find((u: any) => String(u.id) === String(s.user_id) || String(u.phone) === String(s.user_id)) ||
                                         technicians.find((t: any) => String(t.id) === String(s.user_id) || String(t.phone) === String(s.user_id));
+                        const userName = userObj ? (userObj.full_name || userObj.name || s.user_id || '') : (s.user_id || '');
+                        const userPhone = userObj ? (userObj.phone || '') : '';
                         const isTech = userObj ? (userObj.role === 'technician' || userObj.isVerified !== undefined) : false;
-                        
+
                         if (subRoleFilter === 'client' && isTech) return false;
                         if (subRoleFilter === 'technician' && !isTech) return false;
 
-                        return matchesQuery;
+                        if (!q) return true;
+                        return (
+                          (s.id || '').toLowerCase().includes(q) ||
+                          (s.user_id || '').toLowerCase().includes(q) ||
+                          (s.plan_name || '').toLowerCase().includes(q) ||
+                          (s.planName || '').toLowerCase().includes(q) ||
+                          (s.plan_id || '').toLowerCase().includes(q) ||
+                          String(userName).toLowerCase().includes(q) ||
+                          String(userPhone).toLowerCase().includes(q)
+                        );
                       })
                       .map((s: any, sIdx: number) => {
                         const userObj = usersList.find((u: any) => String(u.id) === String(s.user_id) || String(u.phone) === String(s.user_id)) ||
@@ -5260,9 +5273,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         const isTech = userObj ? (userObj.role === 'technician' || userObj.isVerified !== undefined) : false;
 
                         const now = new Date();
-                        const expDate = new Date(s.expiry_date);
+                        const rawExp = s.expiry_date || s.end_date;
+                        const expDate = rawExp ? new Date(rawExp) : new Date(Date.now() + 30 * 86400000);
                         const isExpired = !s.is_active || expDate < now;
                         const diffDays = Math.ceil((expDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+                        const startDateVal = s.start_date || s.startDate || s.created_at;
 
                         return (
                           <tr key={`sub_${s.id}_${sIdx}`} className="hover:bg-slate-50/40 transition-colors">
@@ -5281,14 +5296,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               </div>
                             </td>
                             <td className="py-3 px-4 font-bold text-slate-800">
-                              {s.plan_name === '1_month' ? '۱ ماهه طلایی' :
-                               s.plan_name === '3_month' ? '۳ ماهه نقره‌ای پلاس' :
-                               s.plan_name === '6_month' ? '۶ ماهه VIP' :
-                               s.plan_name === '12_month' ? '۱۲ ماهه وفاداری' :
-                               s.plan_name === 'permanent' ? 'دائمی / نامحدود' : s.plan_name}
+                              {s.plan_name === '1_month' || s.plan_id === '1_month' ? 'اشتراک ۱ ماهه کدهای خطا' :
+                               s.plan_name === '3_month' || s.plan_id === '3_month' ? 'اشتراک ۳ ماهه کدهای خطا' :
+                               s.plan_name === '6_month' || s.plan_id === '6_month' ? 'اشتراک ۶ ماهه کدهای خطا' :
+                               s.plan_name === '12_month' || s.plan_id === '12_month' ? 'اشتراک ۱۲ ماهه کدهای خطا' :
+                               s.plan_name === 'permanent' || s.plan_id === 'permanent' ? 'اشتراک دائمی همکار / مدیریت' : (s.plan_name || s.planName || s.plan_id || 'اشتراک ویژه')}
                             </td>
-                            <td className="py-3 px-4 text-slate-600 font-mono">{s.start_date ? new Date(s.start_date).toLocaleDateString('fa-IR') : '---'}</td>
-                            <td className="py-3 px-4 text-slate-600 font-mono">{s.expiry_date ? new Date(s.expiry_date).toLocaleDateString('fa-IR') : '---'}</td>
+                            <td className="py-3 px-4 text-slate-600 font-mono">{startDateVal ? new Date(startDateVal).toLocaleDateString('fa-IR') : '---'}</td>
+                            <td className="py-3 px-4 text-slate-600 font-mono">{rawExp ? new Date(rawExp).toLocaleDateString('fa-IR') : '---'}</td>
                             <td className="py-3 px-4 font-mono font-bold">
                               {isExpired ? (
                                 <span className="text-red-500">۰ روز</span>
@@ -5511,9 +5526,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               </span>
                             </td>
                             <td className="py-3 px-4 font-bold whitespace-nowrap">
-                              {p.type === 'part_purchase' || p.partId ? (
+                              {p.type === 'part_purchase' || p.related_type === 'part_purchase' || p.partId ? (
                                 <span className="px-2 py-1 bg-amber-50 text-amber-800 border border-amber-200/80 rounded-lg text-[10px] font-extrabold inline-flex items-center gap-1">
-                                  🔧 خرید قطعه: {p.partName || p.partId || 'قطعه یدکی'}
+                                  🔧 خرید قطعه: {p.partName || p.part_name || p.partId || 'قطعه یدکی'}
                                 </span>
                               ) : (
                                 <span className="px-2 py-1 bg-indigo-50 text-indigo-800 border border-indigo-200/80 rounded-lg text-[10px] font-extrabold inline-flex items-center gap-1">
@@ -5552,7 +5567,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                     onClick={() => onApprovePayment && onApprovePayment(p.id)}
                                     className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[10.5px] font-extrabold tracking-tight transition-all duration-200 cursor-pointer shadow-xs whitespace-nowrap flex items-center justify-center gap-1 active:scale-95"
                                   >
-                                    <span>{p.type === 'part_purchase' || p.partId ? 'تایید و ثبت ارسال قطعه' : 'تایید و فعال‌سازی اشتراک'}</span>
+                                    <span>{p.type === 'part_purchase' || p.related_type === 'part_purchase' || p.partId ? 'تایید و ثبت ارسال قطعه' : 'تایید و فعال‌سازی اشتراک'}</span>
                                   </button>
                                   <button
                                     onClick={() => onRejectPayment && onRejectPayment(p.id)}
@@ -5563,7 +5578,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 </div>
                               ) : p.status === 'completed' || p.status === 'confirmed' ? (
                               <span className="text-emerald-600 font-extrabold text-[11px] block py-1">
-                                {p.type === 'part_purchase' || p.partId ? '✓ پرداخت تایید شد (آماده ارسال)' : '✓ تکمیل و فعال‌سازی اشتراک'}
+                                {p.type === 'part_purchase' || p.related_type === 'part_purchase' || p.partId ? '✓ پرداخت تایید شد (آماده ارسال)' : '✓ تکمیل و فعال‌سازی اشتراک'}
                               </span>
                             ) : p.status === 'failed' || p.status === 'rejected' ? (
                               <span className="text-rose-500 font-bold text-[11px] block py-1">لغو شده / رد شده</span>
