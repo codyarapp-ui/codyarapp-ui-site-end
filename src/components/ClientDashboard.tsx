@@ -627,6 +627,22 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
 
   // Subscription buying
   const handlePurchaseSubscription = async (plan: any) => {
+    const hasActiveSub = Boolean(
+      currentUser?.role === 'admin' ||
+      currentUser?.role === 'technician' ||
+      (currentUser?.subscription?.is_premium && currentUser?.subscription?.expiry_date && new Date(currentUser.subscription.expiry_date) > new Date())
+    );
+
+    if (hasActiveSub) {
+      const expDate = currentUser?.subscription?.expiry_date ? formatIranDate(currentUser.subscription.expiry_date) : 'نامحدود';
+      triggerNotification(
+        'شما دارای اشتراک فعال هستید',
+        `اشتراک شما تا تاریخ ${expDate} معتبر است. پس از پایان مهلت اشتراک فعلی، امکان خرید مجدد فعال خواهد شد.`,
+        'warning'
+      );
+      return;
+    }
+
     if (paymentGateway === 'zarinpal') {
       setSubscribingLoading(true);
       try {
@@ -1117,7 +1133,23 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
                 return (
                   <div
                     key={pl.id}
-                    onClick={() => setSelectedPlanId(pl.id)}
+                    onClick={() => {
+                      const hasActive = Boolean(
+                        currentUser?.role === 'admin' ||
+                        currentUser?.role === 'technician' ||
+                        (currentUser?.subscription?.is_premium && currentUser?.subscription?.expiry_date && new Date(currentUser.subscription.expiry_date) > new Date())
+                      );
+                      if (hasActive) {
+                        const expDate = currentUser?.subscription?.expiry_date ? formatIranDate(currentUser.subscription.expiry_date) : 'نامحدود';
+                        triggerNotification(
+                          'شما دارای اشتراک فعال هستید',
+                          `اشتراک شما تا تاریخ ${expDate} فعال است. نیازی به خرید مجدد نیست.`,
+                          'info'
+                        );
+                        return;
+                      }
+                      setSelectedPlanId(pl.id);
+                    }}
                     className={`border-2 rounded-2xl p-4 cursor-pointer text-right transition-all duration-150 relative ${
                       isSelected 
                         ? 'border-blue-600 bg-blue-50/20 shadow-sm' 

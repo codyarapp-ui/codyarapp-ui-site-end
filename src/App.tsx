@@ -177,7 +177,7 @@ export const cleanSparePartsList = (list: any): SparePart[] => {
 
         let compatibility: string[] = [];
         const compRaw = item.compatibility || item.compatibleModels || item.compatible_models;
-        if (Array.isArray(compRaw)) {
+        if (Array.isArray(compRaw) && compRaw.length > 0) {
           compatibility = compRaw.map((x: any) => String(x || '').trim()).filter(Boolean);
         } else if (typeof compRaw === 'string' && compRaw.trim()) {
           try {
@@ -185,11 +185,19 @@ export const cleanSparePartsList = (list: any): SparePart[] => {
             if (Array.isArray(parsed)) {
               compatibility = parsed.map((x: any) => String(x || '').trim()).filter(Boolean);
             } else {
-              compatibility = compRaw.split(',').map((x: string) => x.trim()).filter(Boolean);
+              compatibility = compRaw.split(/[،,]/).map((x: string) => x.trim()).filter(Boolean);
             }
           } catch {
-            compatibility = compRaw.split(',').map((x: string) => x.trim()).filter(Boolean);
+            compatibility = compRaw.split(/[،,]/).map((x: string) => x.trim()).filter(Boolean);
           }
+        }
+
+        if (compatibility.length === 0 && item.compatible_brands && typeof item.compatible_brands === 'string') {
+          compatibility = item.compatible_brands.split(/[،,]/).map((x: string) => x.trim()).filter(Boolean);
+        }
+
+        if (compatibility.length === 0 && item.brand && String(item.brand).trim()) {
+          compatibility = [String(item.brand).trim()];
         }
 
         const img = item.image || item.imageUrl || item.image_url || '';
@@ -411,6 +419,9 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
   if (Array.isArray(payments)) {
     for (const pay of payments) {
       if (pay && (pay.status === 'completed' || pay.status === 'confirmed')) {
+        if (pay.gateway === 'admin_manual' || pay.payment_method === 'admin_manual' || String(pay.id).startsWith('pay_manual_') || String(pay.id).startsWith('manual_')) {
+          continue;
+        }
         const isSubPay = pay.type === 'subscription' || pay.related_type === 'subscription' || (pay.related_id && (String(pay.related_id).includes('month') || pay.related_id === 'permanent')) || (pay.plan && !pay.partId);
         if (isSubPay) {
           const subId = `sub_pay_${pay.id}`;
@@ -2069,9 +2080,12 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
       alert('هیچ درخواستی با این شماره تلفن همراه یافت نشد.');
     }
   };
-  const handlePurchasePart = async (part: SparePart, address: string, buyerName: string, buyerPhone: string, cardHolder: string, trackNumber: string) => {
+  const handlePurchasePart = async (part: SparePart, address: string, buyerName: string, buyerPhone: string, cardHolder: string, trackNumber: string, quantity: number = 1) => {
     try {
       const token = localStorage.getItem('session_user_id') || '';
+      const orderQty = Math.max(1, quantity || 1);
+      const totalAmount = part.price * orderQty;
+
       const response = await fetch('/api/payment/card-verify', {
         method: 'POST',
         headers: {
@@ -2084,6 +2098,7 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
           product_id: part.id,
           part_id: part.id,
           part_name: part.name,
+          quantity: orderQty,
           buyer_name: buyerName || currentUser?.full_name || 'کاربر',
           buyer_phone: buyerPhone || currentUser?.phone || '',
           address: address || '',
@@ -2091,7 +2106,9 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
           user_phone: currentUser?.phone || buyerPhone || '',
           phone: buyerPhone || currentUser?.phone || '',
           type: 'part_purchase',
-          amount: part.price
+          amount: totalAmount,
+          total_price: totalAmount,
+          price: totalAmount
         })
       });
       const data = await response.json();
@@ -2109,14 +2126,15 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
         partName: part.name,
         part_name: part.name,
         partCategory: part.category,
+        quantity: orderQty,
         customerName: buyerName || currentUser?.full_name || 'مشتری',
         buyer_name: buyerName || currentUser?.full_name || 'مشتری',
         customerPhone: buyerPhone || currentUser?.phone || '',
         buyer_phone: buyerPhone || currentUser?.phone || '',
         customerAddress: address,
         address: address,
-        price: part.price,
-        total_price: part.price,
+        price: totalAmount,
+        total_price: totalAmount,
         date: new Date().toLocaleDateString('fa-IR'),
         status: 'pending',
         cardHolder,
@@ -2138,7 +2156,8 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
           type: 'part_purchase',
           partId: part.id,
           partName: part.name,
-          amount: part.price,
+          quantity: orderQty,
+          amount: totalAmount,
           ref_id: trackNumber,
           ref_code: generatedId,
           card_number: cardHolder,
@@ -2866,13 +2885,7 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
     };
     const pName = planNameMap[planId] || 'اشتراک ویژه کدهای خطا';
 
-    const activeSub = subscriptionsList
-      .filter((s: any) => s.user_id === userId && s.is_active)
-      .sort((a: any, b: any) => new Date(b.expiry_date || b.end_date || 0).getTime() - new Date(a.expiry_date || a.end_date || 0).getTime())[0];
-
-    let baseTime = activeSub && new Date(activeSub.expiry_date || activeSub.end_date) > new Date() ? new Date(activeSub.expiry_date || activeSub.end_date) : new Date();
-    baseTime.setDate(baseTime.getDate() + days);
-    const newExpiryDateStr = baseTime.toISOString();
+    const newExpiryDateStr = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 
     let newSub = {
       id: `sub_manual_${Date.now()}`,
@@ -3822,6 +3835,7 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
               <div id="parts-store-section">
                 <PartsStore
                   parts={spareParts}
+                  categoriesList={categoriesList}
                   onPurchase={handlePurchasePart}
                   brandFilter={shopBrandFilter}
                   categoryFilter={shopCategoryFilter}

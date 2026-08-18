@@ -56,7 +56,7 @@ export const SubscriptionRepository = {
     // Auto-reconcile with completed payments in payments table to guarantee no subscription is ever lost
     try {
       const [payRows]: any = await pool.query(
-        "SELECT * FROM payments WHERE (status = 'completed' OR status = 'confirmed') AND (related_type = 'subscription' OR related_id LIKE '%month%' OR related_id = 'permanent') ORDER BY created_at DESC"
+        "SELECT * FROM payments WHERE (status = 'completed' OR status = 'confirmed') AND (related_type = 'subscription' OR related_id LIKE '%month%' OR related_id = 'permanent') AND (payment_method != 'admin_manual' AND (gateway IS NULL OR gateway != 'admin_manual') AND id NOT LIKE 'pay_manual_%' AND id NOT LIKE 'manual_%') ORDER BY created_at DESC"
       );
       if (Array.isArray(payRows) && payRows.length > 0) {
         const existingSubIds = new Set(dbSubs.map(s => String(s.id)));
@@ -165,22 +165,20 @@ export const SubscriptionRepository = {
       targetUserId = `us_guest_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     }
 
-    const [uRows]: any = await pool.query("SELECT id, phone FROM users WHERE id = ? OR phone = ?", [targetUserId, targetUserId]).catch(() => [[], []]);
+    const [uRows]: any = await pool.query("SELECT id, phone, full_name FROM users WHERE id = ? OR phone = ?", [targetUserId, targetUserId]).catch(() => [[], []]);
     if (uRows && uRows.length > 0) {
       targetUserId = uRows[0].id;
     } else {
-      // Ensure user exists in users table to satisfy foreign key constraint fk_sub_user
-      const phoneVal = String(targetUserId).startsWith("09") ? targetUserId : `0999${Math.floor(1000000 + Math.random() * 9000000)}`;
+      // Check technicians table before fallback
+      const [tRows]: any = await pool.query("SELECT id, phone, name FROM technicians WHERE id = ? OR phone = ?", [targetUserId, targetUserId]).catch(() => [[], []]);
+      const actualName = subData.user_name || subData.userName || (tRows && tRows.length > 0 ? tRows[0].name : "") || "کاربر کدیار";
+      const phoneVal = (tRows && tRows.length > 0 ? tRows[0].phone : "") || (String(targetUserId).startsWith("09") ? targetUserId : (subData.phone || `0999${Math.floor(1000000 + Math.random() * 9000000)}`));
+      const roleVal = tRows && tRows.length > 0 ? "technician" : "client";
+
       await pool.query(
         "INSERT INTO users (id, phone, full_name, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE id=id",
-        [targetUserId, phoneVal, "کاربر کدیار۲۴", "client"]
-      ).catch(async () => {
-        const fallbackPhone = `0999${Date.now().toString().slice(-7)}`;
-        await pool.query(
-          "INSERT INTO users (id, phone, full_name, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE id=id",
-          [targetUserId, fallbackPhone, "کاربر کدیار۲۴", "client"]
-        ).catch(() => {});
-      });
+        [targetUserId, phoneVal, actualName, roleVal]
+      ).catch(() => {});
     }
 
     let planId = subData.plan_id || subData.planId || subData.plan || "1_month";
@@ -210,11 +208,13 @@ export const SubscriptionRepository = {
     const status = subData.status || "active";
     const paymentId = subData.payment_id || subData.paymentId || null;
 
-    // If user already has an active subscription, extend from its expiry date
-    const activeExisting = await this.findActiveByUserId(targetUserId, rawUserId);
+    // Base time calculation
     let baseTime = new Date();
-    if (activeExisting && new Date(activeExisting.end_date) > new Date()) {
-      baseTime = new Date(activeExisting.end_date);
+    if (!subData.reset_duration) {
+      const activeExisting = await this.findActiveByUserId(targetUserId, rawUserId);
+      if (activeExisting && new Date(activeExisting.end_date) > new Date()) {
+        baseTime = new Date(activeExisting.end_date);
+      }
     }
 
     let endDate: string;

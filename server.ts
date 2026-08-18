@@ -654,17 +654,62 @@ app.get("/api/orders", async (req, res) => {
 app.get("/api/orders/my-orders", async (req, res) => {
   try {
     const user = await getCurrentUserAsync(req);
-    if (!user) return res.status(401).json({ status: "error", message: "احراز هویت نشده" });
-    const all = await OrderRepository.findAll();
-    const cleanUserPhone = normalizePhone(user.phone);
-    const mine = Array.isArray(all) ? all.filter((o: any) => {
+    const queryPhone = normalizePhone((req.query.phone || req.query.buyer_phone || user?.phone) as string);
+    const queryUserId = (req.query.user_id || req.query.userId || user?.id) as string;
+
+    if (!user && !queryPhone && !queryUserId) {
+      return res.status(401).json({ status: "error", message: "احراز هویت نشده" });
+    }
+
+    const [allOrders, allPartOrders] = await Promise.all([
+      OrderRepository.findAll().catch(() => []),
+      PartOrderRepository.findAll().catch(() => [])
+    ]);
+
+    const cleanUserPhone = queryPhone || (user ? normalizePhone(user.phone) : "");
+    const targetUserId = queryUserId || user?.id;
+
+    const myOrders = Array.isArray(allOrders) ? allOrders.filter((o: any) => {
       const cleanOrderPhone = normalizePhone(o.customer_phone || o.customerPhone);
       return (
-        (user.id && (String(o.user_id) === String(user.id) || String(o.userId) === String(user.id))) ||
+        (targetUserId && (String(o.user_id) === String(targetUserId) || String(o.userId) === String(targetUserId))) ||
         (cleanUserPhone && cleanOrderPhone && cleanUserPhone === cleanOrderPhone)
       );
     }) : [];
-    return res.json({ status: "ok", orders: mine, data: mine });
+
+    const myPartOrders = Array.isArray(allPartOrders) ? allPartOrders.filter((o: any) => {
+      const cleanOrderPhone = normalizePhone(o.buyer_phone || o.customerPhone || o.user_phone);
+      return (
+        (targetUserId && (String(o.user_id) === String(targetUserId) || String(o.userId) === String(targetUserId))) ||
+        (cleanUserPhone && cleanOrderPhone && cleanUserPhone === cleanOrderPhone)
+      );
+    }) : [];
+
+    const formattedPartPurchases = myPartOrders.map(po => {
+      const mappedStatus = mapStatusForMobileApp(po.status);
+      return {
+        id: po.id,
+        order_id: po.id,
+        part_name: po.part_name || po.partName || "قطعه یدکی",
+        quantity: Number(po.quantity) || 1,
+        total_price: Number(po.total_price || po.price) || 0,
+        unit_price: Number(po.unit_price) || (po.total_price && po.quantity ? Math.round(Number(po.total_price) / Number(po.quantity)) : 0),
+        status: mappedStatus,
+        raw_status: po.status || "pending",
+        tracking_code: po.shipping_tracking_code || po.trackNumber || "",
+        created_at: po.created_at || new Date().toISOString(),
+        shamsi_date: po.shamsi_date || po.date || ""
+      };
+    });
+
+    return res.json({
+      status: "ok",
+      success: true,
+      orders: myOrders,
+      partOrders: formattedPartPurchases,
+      purchases: formattedPartPurchases,
+      data: formattedPartPurchases.length > 0 ? formattedPartPurchases : myOrders
+    });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -712,10 +757,21 @@ app.delete("/api/orders/:id", requireAdmin, async (req, res) => {
 function formatSparePartForApi(p: any) {
   if (!p) return null;
   const compBrands = p.compatible_brands || (Array.isArray(p.compatibility) ? p.compatibility.join("، ") : (Array.isArray(p.compatible_models) ? p.compatible_models.join("، ") : (p.brand || "")));
+  
+  // Extract compatibility array reliably
+  let compArray: string[] = [];
+  if (Array.isArray(p.compatibility) && p.compatibility.length > 0) {
+    compArray = p.compatibility.map((x: any) => String(x || '').trim()).filter(Boolean);
+  } else if (typeof compBrands === "string" && compBrands.trim()) {
+    compArray = compBrands.split(/[،,]/).map((x: string) => x.trim()).filter(Boolean);
+  } else if (p.brand && String(p.brand).trim()) {
+    compArray = [String(p.brand).trim()];
+  }
+
   const shortDesc = p.short_description || p.description || p.technical_description || "";
   const devCat = p.device_category || p.category || "";
   const mdl = p.model || p.device_model || "";
-  const brandVal = p.brand || (typeof compBrands === "string" ? compBrands.split("،")[0].trim() : "");
+  const brandVal = p.brand || (compArray.length > 0 ? compArray[0] : (typeof compBrands === "string" ? compBrands.split("،")[0].trim() : ""));
   const img = p.image || p.image_url || p.imageUrl || "";
 
   return {
@@ -727,7 +783,10 @@ function formatSparePartForApi(p: any) {
     brand: brandVal,
     model: mdl,
     device_model: mdl,
-    compatible_brands: compBrands,
+    compatible_brands: compBrands || (compArray.length > 0 ? compArray.join("، ") : ""),
+    compatibility: compArray,
+    compatible_models: compArray,
+    compatibleModels: compArray,
     price: Number(p.price) || 0,
     stock: Number(p.stock) || 0,
     image: img,
@@ -758,6 +817,32 @@ app.get(["/api/v1/spare-parts/:id", "/api/spare-parts/:id"], async (req, res) =>
     if (!item) return res.status(404).json({ status: "error", message: "قطعه یافت نشد" });
     const formatted = formatSparePartForApi(item);
     return res.status(200).json(formatted);
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+app.get(["/api/get-database", "/api/v1/database"], async (req, res) => {
+  try {
+    const [rawParts, problems, errorCodes] = await Promise.all([
+      SparePartRepository.findAll().catch(() => []),
+      ProblemRepository.findAll().catch(() => []),
+      ErrorCodeRepository.findAll().catch(() => [])
+    ]);
+    const formattedParts = (rawParts || []).map(formatSparePartForApi);
+    return res.json({
+      status: "ok",
+      data: {
+        cars: [],
+        ecus: [],
+        spare_parts: formattedParts,
+        repairs: problems,
+        dtc_codes: errorCodes,
+        errorCodes,
+        spareParts: formattedParts,
+        problems
+      }
+    });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -833,22 +918,110 @@ app.get("/api/part-orders", async (req, res) => {
   }
 });
 
-app.get("/api/part-orders/my", async (req, res) => {
+function mapStatusForMobileApp(status: string | null | undefined): string {
+  const s = String(status || '').toLowerCase().trim();
+  if (['approved', 'confirmed', 'completed', 'paid', 'تایید شده', 'پرداخت شده', 'تکمیل شده'].includes(s)) {
+    return 'approved';
+  }
+  if (['sent', 'shipped', 'enroute', 'ارسال شده', 'در حال ارسال'].includes(s)) {
+    return 'sent';
+  }
+  if (['delivered', 'تحویل داده شده', 'تحویل شد'].includes(s)) {
+    return 'delivered';
+  }
+  if (['cancelled', 'rejected', 'failed', 'لغو شده', 'رد شده'].includes(s)) {
+    return 'cancelled';
+  }
+  return 'pending';
+}
+
+app.get(["/api/part-orders/my", "/api/orders/my-part-orders"], async (req, res) => {
   try {
     const user = await getCurrentUserAsync(req);
-    if (!user) return res.status(401).json({ status: "error", message: "احراز هویت نشده" });
+    const queryPhone = normalizePhone((req.query.phone || req.query.buyer_phone || user?.phone) as string);
+    const queryUserId = (req.query.user_id || req.query.userId || user?.id) as string;
+
+    if (!user && !queryPhone && !queryUserId) {
+      return res.status(401).json({ status: "error", message: "احراز هویت نشده" });
+    }
+
     const all = await PartOrderRepository.findAll();
-    const cleanUserPhone = normalizePhone(user.phone);
+    const cleanUserPhone = queryPhone || (user ? normalizePhone(user.phone) : "");
+    const targetUserId = queryUserId || user?.id;
+
     const mine = Array.isArray(all) ? all.filter((o: any) => {
-      const cleanOrderPhone = normalizePhone(o.buyer_phone || o.customerPhone);
+      const cleanOrderPhone = normalizePhone(o.buyer_phone || o.customerPhone || o.user_phone);
       return (
-        (user.id && (String(o.user_id) === String(user.id) || String(o.userId) === String(user.id))) ||
+        (targetUserId && (String(o.user_id) === String(targetUserId) || String(o.userId) === String(targetUserId))) ||
         (cleanUserPhone && cleanOrderPhone && cleanUserPhone === cleanOrderPhone)
       );
     }) : [];
-    return res.json({ status: "ok", partOrders: mine, data: mine });
+
+    const formatted = mine.map(po => {
+      const mappedStatus = mapStatusForMobileApp(po.status);
+      return {
+        id: po.id,
+        order_id: po.id,
+        part_name: po.part_name || po.partName || "قطعه یدکی",
+        quantity: Number(po.quantity) || 1,
+        total_price: Number(po.total_price || po.price) || 0,
+        unit_price: Number(po.unit_price) || (po.total_price && po.quantity ? Math.round(Number(po.total_price) / Number(po.quantity)) : 0),
+        status: mappedStatus,
+        raw_status: po.status || "pending",
+        tracking_code: po.shipping_tracking_code || po.trackNumber || "",
+        created_at: po.created_at || new Date().toISOString(),
+        shamsi_date: po.shamsi_date || po.date || ""
+      };
+    });
+
+    return res.json({
+      status: "ok",
+      success: true,
+      partOrders: formatted,
+      purchases: formatted,
+      orders: formatted,
+      data: formatted
+    });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+app.post(["/api/orders/update-status", "/api/part-orders/update-status"], async (req, res) => {
+  try {
+    const orderId = (req.query.order_id || req.body?.order_id || req.body?.orderId || req.body?.id) as string;
+    const status = (req.query.status || req.body?.status) as string;
+
+    if (!orderId || !status) {
+      return res.status(400).json({ status: "error", message: "شناسه سفارش و وضعیت جدید الزامی است" });
+    }
+
+    const pool = getDbPool();
+    // Try updating part_orders first
+    const [poRes]: any = await pool.query(
+      "UPDATE part_orders SET status = ? WHERE id = ?",
+      [status, orderId]
+    ).catch(() => [{ affectedRows: 0 }]);
+
+    if (poRes && poRes.affectedRows > 0) {
+      // Also sync payment status
+      if (status === 'confirmed' || status === 'approved' || status === 'completed') {
+        await pool.query("UPDATE payments SET status = 'completed' WHERE ref_code = ? OR order_id = ?", [orderId, orderId]).catch(() => {});
+      } else if (status === 'rejected' || status === 'cancelled') {
+        await pool.query("UPDATE payments SET status = 'failed' WHERE ref_code = ? OR order_id = ?", [orderId, orderId]).catch(() => {});
+      }
+      return res.json({ status: "ok", success: true, message: "وضعیت سفارش قطعه با موفقیت به‌روزرسانی شد" });
+    }
+
+    // Try updating orders (repair orders)
+    const [ordRes]: any = await pool.query(
+      "UPDATE orders SET status = ? WHERE id = ?",
+      [status, orderId]
+    ).catch(() => [{ affectedRows: 0 }]);
+
+    return res.json({ status: "ok", success: true, message: "وضعیت سفارش با موفقیت به‌روزرسانی شد" });
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", message: err.message });
   }
 });
 
@@ -859,9 +1032,18 @@ app.post(["/api/store/order", "/api/part-orders", "/api/store/purchase"], async 
 
     const partId = body.part_id || body.partId || body.id;
     const quantity = Math.max(1, Number(body.quantity) || 1);
-    const buyerName = body.buyer_name || body.customerName || user?.name || "مشتری فروشگاه";
-    const buyerPhone = normalizePhone(body.buyer_phone || body.customerPhone || user?.phone || "");
-    const address = body.address || body.customerAddress || "";
+    const buyerName = body.user_name || body.buyer_name || body.customer_name || body.customerName || user?.name || user?.full_name || "مشتری فروشگاه";
+    const buyerPhone = normalizePhone(body.user_phone || body.buyer_phone || body.customer_phone || body.customerPhone || user?.phone || "");
+    
+    // Combine structured address fields from App
+    const addressParts = [
+      body.city,
+      body.address || body.customerAddress || body.customer_address,
+      body.postal_code ? `کدپستی: ${body.postal_code}` : null,
+      body.notes ? `توضیحات: ${body.notes}` : null
+    ].filter(Boolean);
+    const fullAddress = addressParts.length > 0 ? addressParts.join(" - ") : (user?.address || user?.city || "");
+
     let totalPrice = Number(body.total_price || body.totalPrice || body.price || body.amount) || 0;
 
     let partItem: any = null;
@@ -873,27 +1055,58 @@ app.post(["/api/store/order", "/api/part-orders", "/api/store/purchase"], async 
       if (!totalPrice) {
         totalPrice = (Number(partItem.price) || 0) * quantity;
       }
-      // Check & deduct stock if available
-      if (typeof partItem.stock === "number" && partItem.stock >= quantity) {
-        await SparePartRepository.update(partId, { stock: Math.max(0, partItem.stock - quantity) }).catch(() => {});
+    }
+
+    const orderId = body.order_id || body.id || `po_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const status = body.status || "pending";
+
+    const pool = getDbPool();
+    let effectiveUserId = user?.id || body.user_id || body.userId || null;
+    if (!effectiveUserId && buyerPhone) {
+      const [uRows]: any = await pool.query("SELECT id FROM users WHERE phone = ?", [buyerPhone]).catch(() => [[], []]);
+      if (uRows && uRows.length > 0) {
+        effectiveUserId = uRows[0].id;
+      } else {
+        effectiveUserId = `user_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        await pool.query(
+          "INSERT INTO users (id, phone, full_name, role, status) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id=id",
+          [effectiveUserId, buyerPhone, buyerName, "client", "active"]
+        ).catch(() => {});
       }
     }
 
-    const orderId = body.id || `po_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const status = body.status || "pending_payment";
-
     const created = await PartOrderRepository.create({
       id: orderId,
-      user_id: user?.id || body.user_id || body.userId || null,
+      user_id: effectiveUserId,
       part_id: partId || null,
       part_name: body.part_name || body.partName || partItem?.title || partItem?.name || "قطعه یدکی",
       buyer_name: buyerName,
       buyer_phone: buyerPhone,
-      address,
+      address: fullAddress,
       quantity,
       total_price: totalPrice,
       status
     });
+
+    // Create a pending payment record in payments table so admin sees it in Financial/Payments panel
+    const paymentMethod = body.payment_method || body.paymentMethod || "direct_payment";
+    const trackNumber = body.track_number || body.trackNumber || body.shipping_tracking_code || orderId;
+    const cardHolder = body.card_holder || body.cardHolder || buyerName;
+    
+    await PaymentRepository.create({
+      id: `pay_${orderId}`,
+      user_id: effectiveUserId || buyerPhone || "guest",
+      order_id: null,
+      related_type: "part_purchase",
+      related_id: partId || null,
+      amount: totalPrice,
+      payment_method: paymentMethod,
+      authority: `ORDER_${orderId}`,
+      ref_id: trackNumber,
+      ref_code: orderId,
+      card_number: cardHolder,
+      status: "pending"
+    }).catch(() => {});
 
     const host = req.get("host") || "localhost:3000";
     const proto = req.secure || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
@@ -903,11 +1116,12 @@ app.post(["/api/store/order", "/api/part-orders", "/api/store/purchase"], async 
       status: "ok",
       success: true,
       message: "سفارش خرید قطعه با موفقیت ثبت شد",
+      order_id: orderId,
       order: created,
       partOrder: created,
-      order_id: orderId,
       payment_url: paymentUrl,
-      paymentUrl
+      paymentUrl,
+      data: created
     });
   } catch (err: any) {
     console.error("Part order error:", err);
@@ -936,9 +1150,80 @@ app.get("/api/parts/:id", async (req, res) => {
   }
 });
 
-app.get("/api/technicians", async (req, res) => {
+async function getCachedCitiesList(): Promise<Array<{ name: string; regions: string[] }>> {
   try {
-    const list = await TechnicianRepository.findAll();
+    const pool = getDbPool();
+    const [rows]: any = await pool.query("SELECT setting_value FROM settings WHERE setting_key = 'citiesList'");
+    if (rows && rows.length > 0 && rows[0].setting_value) {
+      const parsed = typeof rows[0].setting_value === "string" ? JSON.parse(rows[0].setting_value) : rows[0].setting_value;
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+  return [];
+}
+
+function normalizeLocString(s: string): string {
+  if (!s) return "";
+  return String(s)
+    .trim()
+    .replace(/[ـ،,\-_]/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function isLocationMatching(loc1: string, loc2: string, citiesList: Array<{ name: string; regions: string[] }>): boolean {
+  if (!loc1 || !loc2) return true;
+  const n1 = normalizeLocString(loc1);
+  const n2 = normalizeLocString(loc2);
+  if (!n1 || !n2) return true;
+
+  // Direct match / substring match
+  if (n1 === n2 || n1.includes(n2) || n2.includes(n1)) return true;
+
+  // Check matching against citiesList from settings
+  if (Array.isArray(citiesList) && citiesList.length > 0) {
+    for (const group of citiesList) {
+      const gName = normalizeLocString(group.name || "");
+      const gRegions = (group.regions || []).map(r => normalizeLocString(r));
+
+      const inGroup1 = (gName && (n1.includes(gName) || gName.includes(n1))) || gRegions.some(r => r && (n1.includes(r) || r.includes(n1)));
+      const inGroup2 = (gName && (n2.includes(gName) || gName.includes(n2))) || gRegions.some(r => r && (n2.includes(r) || r.includes(n2)));
+
+      if (inGroup1 && inGroup2) {
+        return true;
+      }
+    }
+  }
+
+  // Markazi province keywords matching (اراک، فرمهین، ساوه، خمین، محلات، شازند...)
+  const markaziKeywords = ["اراک", "مرکزی", "فرمهین", "ساوه", "خمین", "محلات", "شازند", "تفرش", "دلیجان", "زرندیه", "کمیجان", "آشتیان", "خنداب"];
+  const isMarkazi1 = markaziKeywords.some(k => n1.includes(k));
+  const isMarkazi2 = markaziKeywords.some(k => n2.includes(k));
+  if (isMarkazi1 && isMarkazi2) return true;
+
+  return false;
+}
+
+app.get(["/api/technicians", "/api/v1/technicians"], async (req, res) => {
+  try {
+    let list = await TechnicianRepository.findAll();
+    const queryCity = (req.query.city || req.query.location || req.query.region) as string;
+    const queryUserId = (req.query.user_id || req.query.userId) as string;
+    const queryPhone = (req.query.phone || req.query.mobile) as string;
+
+    let targetCity = queryCity;
+    if (!targetCity && (queryUserId || queryPhone)) {
+      const user = queryUserId ? await UserRepository.findById(queryUserId).catch(() => null) : await UserRepository.findByPhone(queryPhone).catch(() => null);
+      if (user && user.city) {
+        targetCity = user.city;
+      }
+    }
+
+    if (targetCity) {
+      const settingsCities = await getCachedCitiesList();
+      list = list.filter(t => isLocationMatching(t.city || t.active_location || t.activeLocation || '', targetCity, settingsCities));
+    }
+
     return res.json({ status: "ok", technicians: list, data: list });
   } catch (err: any) {
     return res.json({ status: "ok", technicians: [], data: [] });
@@ -1802,11 +2087,12 @@ app.post([
   }
 });
 
-app.post("/api/payment/card-verify", async (req, res) => {
+app.post(["/api/payments/receipt", "/api/payment/card-verify", "/api/payments/card-verify"], async (req, res) => {
   try {
     const user = await getCurrentUserAsync(req).catch(() => null);
     const {
       product_id,
+      plan_id,
       part_id,
       part_name,
       part_price,
@@ -1818,9 +2104,13 @@ app.post("/api/payment/card-verify", async (req, res) => {
       track_number,
       amount,
       type,
+      payment_type,
       user_id,
       phone
     } = req.body || {};
+
+    const effectiveProductId = product_id || plan_id;
+    const effectiveType = type || payment_type;
 
     const pool = getDbPool();
     let effectiveUserId = user?.id || user_id || null;
@@ -1845,16 +2135,27 @@ app.post("/api/payment/card-verify", async (req, res) => {
       ).catch(() => {});
     }
 
-    const targetPartId = part_id || product_id;
-    const matchedPlan = SUBSCRIPTION_PLANS.find(p => p.id === product_id);
-    const isSubscription = !!matchedPlan || type === "subscription" || (product_id && String(product_id).includes("month"));
+    const targetPartId = part_id || (!effectiveProductId?.includes("month") && !effectiveProductId?.includes("vip") && !effectiveProductId?.includes("year") ? effectiveProductId : null);
+    const matchedPlan = SUBSCRIPTION_PLANS.find(p => p.id === effectiveProductId);
+    const isSubscription = !!matchedPlan || effectiveType === "subscription" || (effectiveProductId && String(effectiveProductId).includes("month")) || (effectiveProductId && String(effectiveProductId).includes("vip"));
 
     if (isSubscription) {
+      // Check if user already has an active subscription
+      if (effectiveUserId || effectivePhone) {
+        const activeSub = await SubscriptionRepository.findActiveByUserId(effectiveUserId, effectivePhone);
+        if (activeSub && new Date(activeSub.end_date) > new Date()) {
+          return res.status(400).json({
+            status: "error",
+            error: "شما در حال حاضر دارای اشتراک فعال هستید و پس از پایان مهلت می‌توانید تمدید نمایید."
+          });
+        }
+      }
+
       const paymentAmount = matchedPlan ? matchedPlan.price : (Number(amount) || 0);
       const newPayment = await PaymentRepository.create({
         user_id: effectiveUserId,
         related_type: "subscription",
-        related_id: product_id || "1_month",
+        related_id: effectiveProductId || "1_month",
         amount: paymentAmount,
         payment_method: "card_to_card",
         authority: `CARD_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
@@ -1865,7 +2166,7 @@ app.post("/api/payment/card-verify", async (req, res) => {
       });
 
       await logUserActivity(req, "subscription_payment_submitted", "subscription", {
-        plan: product_id || "1_month",
+        plan: effectiveProductId || "1_month",
         amount: paymentAmount,
         track_number,
         userId: effectiveUserId
@@ -1874,7 +2175,8 @@ app.post("/api/payment/card-verify", async (req, res) => {
       return res.json({
         status: "ok",
         message: "فیش واریزی خرید اشتراک با موفقیت ثبت گردید و پس از تایید مدیریت فعال می‌شود.",
-        payment: newPayment
+        payment: newPayment,
+        data: newPayment
       });
     } else {
       // Part purchase payment - Create part order and payment atomically in database
@@ -1930,7 +2232,8 @@ app.post("/api/payment/card-verify", async (req, res) => {
         message: "فیش واریزی خرید قطعه با موفقیت ثبت شد و در انتظار بررسی واحد مالی است.",
         payment: newPayment,
         partOrder: newPartOrder,
-        order: newPartOrder
+        order: newPartOrder,
+        data: { payment: newPayment, partOrder: newPartOrder }
       });
     }
   } catch (err: any) {
@@ -1945,6 +2248,16 @@ app.post("/api/payment/request", async (req, res) => {
 
     const matchedPlan = SUBSCRIPTION_PLANS.find(p => p.id === (plan || productId));
     const isSubscription = !!matchedPlan || (plan && String(plan).includes("month"));
+
+    if (isSubscription && user) {
+      const activeSub = await SubscriptionRepository.findActiveByUserId(user.id, user.phone);
+      if (activeSub && new Date(activeSub.end_date) > new Date()) {
+        return res.status(400).json({
+          status: "error",
+          error: "شما در حال حاضر دارای اشتراک فعال هستید و پس از پایان مهلت می‌توانید تمدید نمایید."
+        });
+      }
+    }
 
     const relatedType = isSubscription ? "subscription" : "part_purchase";
     const paymentAmount = matchedPlan ? matchedPlan.price : (amount || 0);
@@ -2028,14 +2341,34 @@ app.get("/api/subscriptions/my-status", async (req, res) => {
 app.post("/api/subscriptions/manual-add", requireAdmin, async (req, res) => {
   try {
     const { userId, planId, durationDays } = req.body || {};
+    let targetUser: any = null;
+    if (userId) {
+      targetUser = (await UserRepository.findById(userId).catch(() => null)) || (await UserRepository.findByPhone(userId).catch(() => null));
+      if (!targetUser) {
+        targetUser = await TechnicianRepository.findById(userId).catch(() => null);
+        if (!targetUser) {
+          const pool = getDbPool();
+          const [tRows]: any = await pool.query("SELECT * FROM technicians WHERE phone = ?", [userId]).catch(() => [[], []]);
+          if (tRows && tRows.length > 0) targetUser = tRows[0];
+        }
+      }
+    }
+
+    const cleanUserId = targetUser ? targetUser.id : userId;
+    const cleanUserName = targetUser ? (targetUser.full_name || targetUser.fullName || targetUser.name) : null;
+    const cleanUserPhone = targetUser ? targetUser.phone : (String(userId).startsWith("09") ? userId : "");
+
     const created = await SubscriptionRepository.create({
-      user_id: userId,
+      user_id: cleanUserId,
+      user_name: cleanUserName,
+      phone: cleanUserPhone,
       plan_id: planId || "1_month",
       price: 0,
       duration_days: durationDays || 30,
-      status: "active"
+      status: "active",
+      reset_duration: true
     });
-    await logUserActivity(req, "subscription_manually_added", "admin", { userId, planId });
+    await logUserActivity(req, "subscription_manually_added", "admin", { userId: cleanUserId, planId });
     return res.json({ status: "ok", subscription: created });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
