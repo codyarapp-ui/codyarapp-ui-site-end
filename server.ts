@@ -36,6 +36,75 @@ app.use(compression());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+// ----------------------------------------------------
+// SECURITY HARDENING MIDDLEWARES
+// ----------------------------------------------------
+
+// 1. Security Headers (Anti-Clickjacking, XSS Protection, No Sniff, Referrer Policy)
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.removeHeader("X-Powered-By");
+  next();
+});
+
+// 2. Block direct URL access to sensitive files (.env, .git, database dumps, backups, etc.)
+app.use((req, res, next) => {
+  const normalizedPath = decodeURIComponent(req.path).toLowerCase();
+  const blockedPatterns = [
+    /\/\.env/i,
+    /\/\.git/i,
+    /\.sql$/i,
+    /\.bak$/i,
+    /\.sqlite$/i,
+    /\/backups\//i,
+    /\/uploads\/backups\//i,
+    /\/database\.json/i,
+    /\/firebase[^\/]*\.json/i,
+    /\/package\.json/i,
+    /\/tsconfig\.json/i
+  ];
+
+  for (const pattern of blockedPatterns) {
+    if (pattern.test(normalizedPath)) {
+      return res.status(403).json({ status: "error", message: "دسترسی به این منبع غیرمجاز است." });
+    }
+  }
+  next();
+});
+
+// 3. In-memory Rate Limiter for Authentication & Sensitive endpoints (Brute Force Protection)
+const authRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function createRateLimiter(maxAttempts = 15, windowMs = 60 * 1000) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+    const key = `${req.path}:${ip}`;
+    const now = Date.now();
+    const record = authRateLimitMap.get(key);
+
+    if (!record || record.resetAt < now) {
+      authRateLimitMap.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    if (record.count >= maxAttempts) {
+      const waitSec = Math.ceil((record.resetAt - now) / 1000);
+      return res.status(429).json({
+        status: "error",
+        message: `تعداد درخواست‌های بیش از حد مجاز. لطفاً ${waitSec} ثانیه دیگر مجدداً تلاش نمایید.`
+      });
+    }
+
+    record.count++;
+    next();
+  };
+}
+
+const authRateLimit = createRateLimiter(15, 60 * 1000); // 15 requests per minute for login/admin-login
+const otpRateLimit = createRateLimiter(5, 60 * 1000);   // 5 OTP requests per minute
+
 // Activity Logger Helper to track all user actions into database
 async function logUserActivity(
   req: express.Request,
@@ -158,7 +227,7 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.post("/api/auth/admin-login", async (req, res) => {
+app.post("/api/auth/admin-login", authRateLimit, async (req, res) => {
   try {
     const { password } = req.body || {};
     const envAdminPass = process.env.ADMIN_PASSWORD || "admin123";
@@ -214,8 +283,12 @@ app.get("/api/auth/me", async (req, res) => {
         user.role === "admin"
       );
 
+      const userClean = { ...user };
+      delete userClean.password_hash;
+      delete userClean.password;
+
       const enrichedUser = {
-        ...user,
+        ...userClean,
         is_premium: isPremium,
         isPremium: isPremium,
         subscription_plan: user.subscription_plan || user.subscription?.plan || (isPremium ? "sub_1_month" : ""),
@@ -230,7 +303,7 @@ app.get("/api/auth/me", async (req, res) => {
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", authRateLimit, async (req, res) => {
   try {
     const { phone, password } = req.body || {};
     if (!phone) {
@@ -245,7 +318,10 @@ app.post("/api/auth/login", async (req, res) => {
       }
       const session = await issueSession(req, res, user.id);
       await logUserActivity(req, "user_login", "auth", { phone }, user);
-      return res.json({ status: "ok", user, ...session });
+      const userSafe = { ...user };
+      delete userSafe.password_hash;
+      delete userSafe.password;
+      return res.json({ status: "ok", user: userSafe, ...session });
     }
     return res.status(404).json({ status: "error", message: "کاربری با این شماره یافت نشد" });
   } catch (err: any) {
@@ -254,7 +330,7 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", authRateLimit, async (req, res) => {
   try {
     const { phone, fullName, full_name, password, city, role, specialty, specialties, documents } = req.body || {};
     // Security: Only allow technician or client role in public registration; never allow admin or is_super_admin
@@ -289,7 +365,10 @@ app.post("/api/auth/register", async (req, res) => {
 
     const session = await issueSession(req, res, newUser.id);
     await logUserActivity(req, "user_register", "auth", { phone: newUser.phone, role: newUser.role }, newUser);
-    return res.json({ status: "ok", user: newUser, ...session });
+    const safeNewUser = { ...newUser };
+    delete safeNewUser.password_hash;
+    delete safeNewUser.password;
+    return res.json({ status: "ok", user: safeNewUser, ...session });
   } catch (err: any) {
     console.error("[register] error:", err);
     return res.status(500).json({ status: "error", message: "خطای سرور در ثبتنام" });
@@ -385,7 +464,7 @@ async function sendForgotPasswordSms(phone: string, code: string): Promise<{ suc
   }
 }
 
-app.post("/api/auth/forgot-password-request", async (req, res) => {
+app.post("/api/auth/forgot-password-request", otpRateLimit, async (req, res) => {
   try {
     const { phone, role } = req.body || {};
     const cleanPhone = normalizePhone(phone);
@@ -438,7 +517,7 @@ app.post("/api/auth/forgot-password-request", async (req, res) => {
   }
 });
 
-app.post("/api/auth/forgot-password-reset", async (req, res) => {
+app.post("/api/auth/forgot-password-reset", otpRateLimit, async (req, res) => {
   try {
     const { phone, otp, newPassword, role } = req.body || {};
     const cleanPhone = normalizePhone(phone);
@@ -576,12 +655,20 @@ app.get("/api/error-codes/:id", async (req, res) => {
   }
 });
 
-app.get("/api/problems", async (req, res) => {
+app.get(["/api/problems", "/api/common-problems"], async (req, res) => {
   try {
     const problems = await ProblemRepository.findAll();
-    return res.json({ status: "ok", problems, commonProblems: problems });
+    return res.json({
+      status: "ok",
+      problems,
+      commonProblems: problems,
+      generalProblems: problems,
+      data: problems,
+      results: problems,
+      total: problems.length
+    });
   } catch (err: any) {
-    return res.status(500).json({ status: "error", error: err.message });
+    return res.status(500).json({ status: "error", error: err.message, problems: [], commonProblems: [], data: [] });
   }
 });
 
@@ -635,15 +722,36 @@ app.get("/api/general-problems/:id", async (req, res) => {
 
 app.get("/api/orders", async (req, res) => {
   try {
+    const user = await getCurrentUserAsync(req).catch(() => null);
     let orders = await OrderRepository.findAll();
     const queryPhone = normalizePhone((req.query.phone || req.query.customer_phone || req.query.customerPhone) as string);
     const queryUserId = (req.query.user_id || req.query.userId) as string;
 
-    if (queryPhone) {
-      orders = orders.filter((o: any) => normalizePhone(o.customer_phone || o.customerPhone) === queryPhone);
-    } else if (queryUserId) {
-      orders = orders.filter((o: any) => String(o.user_id || o.userId) === String(queryUserId));
+    // If user is Admin, allow viewing all orders (or filtering by phone/user_id)
+    if (user && (user.role === "admin" || user.is_super_admin)) {
+      if (queryPhone) {
+        orders = orders.filter((o: any) => normalizePhone(o.customer_phone || o.customerPhone) === queryPhone);
+      } else if (queryUserId) {
+        orders = orders.filter((o: any) => String(o.user_id || o.userId) === String(queryUserId));
+      }
+      return res.json({ status: "ok", orders, data: { orders } });
     }
+
+    // For non-admin or unauthenticated callers, restrict strictly to their own phone / user_id
+    const callerPhone = queryPhone || (user ? normalizePhone(user.phone) : "");
+    const callerUserId = queryUserId || (user ? user.id : "");
+
+    if (!callerPhone && !callerUserId) {
+      return res.status(401).json({ status: "error", message: "احراز هویت نشده", orders: [], data: { orders: [] } });
+    }
+
+    orders = orders.filter((o: any) => {
+      const orderPhone = normalizePhone(o.customer_phone || o.customerPhone);
+      return (
+        (callerUserId && (String(o.user_id) === String(callerUserId) || String(o.userId) === String(callerUserId))) ||
+        (callerPhone && orderPhone && callerPhone === orderPhone)
+      );
+    });
 
     return res.json({ status: "ok", orders, data: { orders } });
   } catch (err: any) {
@@ -800,6 +908,29 @@ function formatSparePartForApi(p: any) {
   };
 }
 
+function formatCommonProblemForApp(p: any) {
+  if (!p) return null;
+  const causes = Array.isArray(p.causes) ? p.causes : (typeof p.causes === "string" ? [p.causes] : []);
+  const solutions = Array.isArray(p.solutions) ? p.solutions : (typeof p.solutions === "string" ? [p.solutions] : []);
+  const symptoms = Array.isArray(p.symptoms) ? p.symptoms : (typeof p.symptoms === "string" ? [p.symptoms] : []);
+  const steps = Array.isArray(p.steps) ? p.steps : (solutions.length > 0 ? solutions : (typeof p.steps === "string" ? [p.steps] : []));
+  const desc = p.description || p.problem_description || (symptoms.length > 0 ? symptoms.join(" - ") : (p.title || ""));
+
+  return {
+    id: String(p.id || ""),
+    title: p.title || "",
+    brand: p.brand || "",
+    category: p.category || "",
+    model: p.model || "",
+    description: desc,
+    causes: causes,
+    steps: steps,
+    solutions: solutions,
+    symptoms: symptoms,
+    severity: p.severity || "medium"
+  };
+}
+
 // App API Endpoints for Mobile App & Web Store
 app.get(["/api/v1/spare-parts", "/api/spare-parts"], async (req, res) => {
   try {
@@ -822,25 +953,79 @@ app.get(["/api/v1/spare-parts/:id", "/api/spare-parts/:id"], async (req, res) =>
   }
 });
 
+app.get([
+  "/api/problems",
+  "/api/general-problems",
+  "/api/common-problems",
+  "/api/v1/problems",
+  "/api/v1/common-problems"
+], async (req, res) => {
+  try {
+    const raw = await ProblemRepository.findAll().catch(() => []);
+    const formatted = (raw || []).map(formatCommonProblemForApp).filter(Boolean);
+    return res.json({
+      status: "ok",
+      success: true,
+      common_problems: formatted,
+      commonProblems: formatted,
+      problems: formatted,
+      data: {
+        common_problems: formatted,
+        commonProblems: formatted,
+        problems: formatted
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message, common_problems: [], data: [] });
+  }
+});
+
+app.get([
+  "/api/problems/:id",
+  "/api/general-problems/:id",
+  "/api/common-problems/:id"
+], async (req, res) => {
+  try {
+    const p = await ProblemRepository.findById(req.params.id);
+    if (!p) return res.status(404).json({ status: "error", message: "مورد یافت نشد" });
+    const formatted = formatCommonProblemForApp(p);
+    return res.json({ status: "ok", problem: formatted, common_problem: formatted, data: formatted });
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
 app.get(["/api/get-database", "/api/v1/database"], async (req, res) => {
   try {
-    const [rawParts, problems, errorCodes] = await Promise.all([
+    const [rawParts, rawProblems, errorCodes] = await Promise.all([
       SparePartRepository.findAll().catch(() => []),
       ProblemRepository.findAll().catch(() => []),
       ErrorCodeRepository.findAll().catch(() => [])
     ]);
     const formattedParts = (rawParts || []).map(formatSparePartForApi);
+    const formattedProblems = (rawProblems || []).map(formatCommonProblemForApp).filter(Boolean);
+
     return res.json({
       status: "ok",
+      success: true,
+      common_problems: formattedProblems,
+      commonProblems: formattedProblems,
+      problems: formattedProblems,
+      spare_parts: formattedParts,
+      spareParts: formattedParts,
+      error_codes: errorCodes,
+      errorCodes: errorCodes,
       data: {
         cars: [],
         ecus: [],
         spare_parts: formattedParts,
-        repairs: problems,
+        spareParts: formattedParts,
+        repairs: formattedProblems,
         dtc_codes: errorCodes,
         errorCodes,
-        spareParts: formattedParts,
-        problems
+        problems: formattedProblems,
+        common_problems: formattedProblems,
+        commonProblems: formattedProblems
       }
     });
   } catch (err: any) {
@@ -889,11 +1074,35 @@ app.delete("/api/store/parts/:id", requireAdmin, async (req, res) => {
 
 app.get("/api/store/part-orders", async (req, res) => {
   try {
+    const user = await getCurrentUserAsync(req).catch(() => null);
     let partOrders = await PartOrderRepository.findAll();
     const queryPhone = normalizePhone((req.query.phone || req.query.buyer_phone || req.query.customerPhone) as string);
-    if (queryPhone) {
-      partOrders = partOrders.filter((po: any) => normalizePhone(po.buyer_phone || po.customerPhone) === queryPhone);
+    const queryUserId = (req.query.user_id || req.query.userId) as string;
+
+    if (user && (user.role === "admin" || user.is_super_admin)) {
+      if (queryPhone) {
+        partOrders = partOrders.filter((po: any) => normalizePhone(po.buyer_phone || po.customerPhone) === queryPhone);
+      } else if (queryUserId) {
+        partOrders = partOrders.filter((po: any) => String(po.user_id || po.userId) === String(queryUserId));
+      }
+      return res.json({ status: "ok", partOrders, partPurchases: partOrders, data: partOrders });
     }
+
+    const callerPhone = queryPhone || (user ? normalizePhone(user.phone) : "");
+    const callerUserId = queryUserId || (user ? user.id : "");
+
+    if (!callerPhone && !callerUserId) {
+      return res.status(401).json({ status: "error", message: "احراز هویت نشده", partOrders: [], partPurchases: [], data: [] });
+    }
+
+    partOrders = partOrders.filter((po: any) => {
+      const orderPhone = normalizePhone(po.buyer_phone || po.customerPhone || po.user_phone);
+      return (
+        (callerUserId && (String(po.user_id) === String(callerUserId) || String(po.userId) === String(callerUserId))) ||
+        (callerPhone && orderPhone && callerPhone === orderPhone)
+      );
+    });
+
     return res.json({ status: "ok", partOrders, partPurchases: partOrders, data: partOrders });
   } catch (err: any) {
     return res.json({ status: "ok", partOrders: [], partPurchases: [], data: [] });
@@ -902,15 +1111,34 @@ app.get("/api/store/part-orders", async (req, res) => {
 
 app.get("/api/part-orders", async (req, res) => {
   try {
+    const user = await getCurrentUserAsync(req).catch(() => null);
     let partOrders = await PartOrderRepository.findAll();
     const queryPhone = normalizePhone((req.query.phone || req.query.buyer_phone || req.query.customerPhone) as string);
     const queryUserId = (req.query.user_id || req.query.userId) as string;
 
-    if (queryPhone) {
-      partOrders = partOrders.filter((po: any) => normalizePhone(po.buyer_phone || po.customerPhone) === queryPhone);
-    } else if (queryUserId) {
-      partOrders = partOrders.filter((po: any) => String(po.user_id || po.userId) === String(queryUserId));
+    if (user && (user.role === "admin" || user.is_super_admin)) {
+      if (queryPhone) {
+        partOrders = partOrders.filter((po: any) => normalizePhone(po.buyer_phone || po.customerPhone) === queryPhone);
+      } else if (queryUserId) {
+        partOrders = partOrders.filter((po: any) => String(po.user_id || po.userId) === String(queryUserId));
+      }
+      return res.json({ status: "ok", partOrders, data: partOrders });
     }
+
+    const callerPhone = queryPhone || (user ? normalizePhone(user.phone) : "");
+    const callerUserId = queryUserId || (user ? user.id : "");
+
+    if (!callerPhone && !callerUserId) {
+      return res.status(401).json({ status: "error", message: "احراز هویت نشده", partOrders: [], data: [] });
+    }
+
+    partOrders = partOrders.filter((po: any) => {
+      const orderPhone = normalizePhone(po.buyer_phone || po.customerPhone || po.user_phone);
+      return (
+        (callerUserId && (String(po.user_id) === String(callerUserId) || String(po.userId) === String(callerUserId))) ||
+        (callerPhone && orderPhone && callerPhone === orderPhone)
+      );
+    });
 
     return res.json({ status: "ok", partOrders, data: partOrders });
   } catch (err: any) {
@@ -987,7 +1215,7 @@ app.get(["/api/part-orders/my", "/api/orders/my-part-orders"], async (req, res) 
   }
 });
 
-app.post(["/api/orders/update-status", "/api/part-orders/update-status"], async (req, res) => {
+app.post(["/api/orders/update-status", "/api/part-orders/update-status"], requireAdmin, async (req, res) => {
   try {
     const orderId = (req.query.order_id || req.body?.order_id || req.body?.orderId || req.body?.id) as string;
     const status = (req.query.status || req.body?.status) as string;
@@ -1162,13 +1390,252 @@ async function getCachedCitiesList(): Promise<Array<{ name: string; regions: str
   return [];
 }
 
+function cleanLocNoise(s: string): string {
+  if (!s) return "";
+  const noiseWords = [
+    "محل سکونت", "محل فعالیت", "محدوده فعالیت", "حوزه فعالیت", "محدوده های فعالیت",
+    "محدوده", "منطقه", "ناحیه", "بخش", "روستای", "روستا", "مرکز", "حومه",
+    "شهرستان", "استان", "شهر", "کلانشهر", "کلان شهر"
+  ];
+  let res = String(s);
+  for (const word of noiseWords) {
+    res = res.split(word).join(" ");
+  }
+  return res.replace(/\s+/g, " ").trim();
+}
+
 function normalizeLocString(s: string): string {
   if (!s) return "";
   return String(s)
     .trim()
-    .replace(/[ـ،,\-_]/g, " ")
+    .replace(/[ـ،,\-_/\\()\[\]{}:;]/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\u200c\u200f]/g, " ")
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/ة/g, "ه")
+    .replace(/آ/g, "ا")
     .replace(/\s+/g, " ")
+    .trim()
     .toLowerCase();
+}
+
+const PROVINCE_FAMILIES: Array<{ family: string; aliases: string[]; regions: string[] }> = [
+  {
+    family: "اراک",
+    aliases: ["اراک", "مرکزی", "استان مرکزی"],
+    regions: ["فرمهین", "ساوه", "خمین", "محلات", "شازند", "تفرش", "دلیجان", "زرندیه", "کمیجان", "آشتیان", "خنداب", "مامونیه", "غرق آباد", "میلاجرد", "ساروق", "نراق"]
+  },
+  {
+    family: "تهران",
+    aliases: ["تهران", "استان تهران"],
+    regions: ["ری", "شهر ری", "شمیرانات", "شمیران", "تجریش", "اسلامشهر", "شهریار", "دماوند", "ورامین", "پاکدشت", "رباط کریم", "قدس", "شهر قدس", "ملارد", "پردیس", "بهارستان", "قرچک", "فیروزکوه", "بومهن", "رودهن", "لواسان", "اندیشه", "صفادشت", "کهریزک", "حسن آباد"]
+  },
+  {
+    family: "مشهد",
+    aliases: ["مشهد", "خراسان", "خراسان رضوی"],
+    regions: ["نیشابور", "سبزوار", "تربت حیدریه", "قوچان", "چناران", "کاشمر", "تربت جام", "تایباد", "سرخس", "گناباد", "فریمان", "بینالود", "طرقبه", "شاندیز", "خواف", "بردسکن", "تایباد", "درگز", "کلات", "باخرز", "خلیل آباد"]
+  },
+  {
+    family: "اصفهان",
+    aliases: ["اصفهان", "استان اصفهان"],
+    regions: ["کاشان", "خمینی شهر", "نجف آباد", "شاهین شهر", "فولادشهر", "لنجان", "شهرضا", "مبارکه", "فلاورجان", "آران و بیدگل", "زرین شهر", "گلپایگان", "سمیرم", "خوانسار", "تیران", "داران", "نطنز", "اردستان", "نائین"]
+  },
+  {
+    family: "شیراز",
+    aliases: ["شیراز", "فارس", "استان فارس"],
+    regions: ["مرودشت", "کازرون", "جهرم", "لار", "لارستان", "فسا", "داراب", "فیروزآباد", "ممسنی", "نورآباد", "آباده", "اقلید", "سپیدان", "استهبان", "نی ریز", "لامرد", "کوار"]
+  },
+  {
+    family: "تبریز",
+    aliases: ["تبریز", "آذربایجان شرقی", "آذربایجان"],
+    regions: ["مراغه", "مرند", "میانه", "اهر", "بناب", "سراب", "آذرشهر", "اسکو", "شبستر", "عجب شیر", "ملکان", "هریس", "بستان آباد", "کلیبر", "جلفا", "سهند"]
+  },
+  {
+    family: "اهواز",
+    aliases: ["اهواز", "خوزستان", "استان خوزستان"],
+    regions: ["آبادان", "دزفول", "خرمشهر", "ماهشهر", "بندر ماهشهر", "ایذه", "بهبهان", "شوشتر", "شوش", "امیدیه", "مسجد سلیمان", "رامهرمز", "اندیمشک", "شادگان", "هندیجان", "سوسنگرد", "دشت آزادگان"]
+  },
+  {
+    family: "کرج",
+    aliases: ["کرج", "البرز", "استان البرز"],
+    regions: ["فردیس", "ساوجبلاغ", "نظرآباد", "هشتگرد", "طالقان", "اشتهارد", "کمال شهر", "محمدشهر", "ماهدشت", "گرمدره", "چهارباغ"]
+  },
+  {
+    family: "قم",
+    aliases: ["قم", "استان قم"],
+    regions: ["کهک", "جعفریه", "سلفچگان", "قنوات", "دستجرد"]
+  },
+  {
+    family: "رشت",
+    aliases: ["رشت", "گیلان", "استان گیلان"],
+    regions: ["انزلی", "بندر انزلی", "لاهیجان", "لنگرود", "فومن", "رودسر", "تالش", "هشتپر", "صومعه سرا", "آستارا", "آستانه اشرفیه", "رودبار", "منجیل", "لوشان", "ماسوله", "ماسال", "شفت", "سیاهکل", "رضوانشهر"]
+  },
+  {
+    family: "ساری",
+    aliases: ["ساری", "مازندران", "استان مازندران"],
+    regions: ["بابل", "آمل", "قائم شهر", "قائمشهر", "تنکابن", "شهسوار", "چالوس", "نوشهر", "بابلسر", "رامسر", "محمودآباد", "نور", "نکا", "بهشهر", "فریدونکنار", "جویبار", "سوادکوه", "زیرآب", "پل سفید", "کلاردشت", "عباس آباد", "رویان"]
+  },
+  {
+    family: "کرمانشاه",
+    aliases: ["کرمانشاه", "استان کرمانشاه"],
+    regions: ["اسلام آباد غرب", "کنگاور", "سنقر", "جوانرود", "صحنه", "هرسین", "سرپل ذهاب", "پاوه", "روانسر", "گیلانغرب", "قصر شیرین", "تازه آباد"]
+  },
+  {
+    family: "ارومیه",
+    aliases: ["ارومیه", "آذربایجان غربی"],
+    regions: ["خوی", "بوکان", "مهاباد", "میاندوآب", "سلماس", "پیرانشهر", "نقده", "تکاب", "ماکو", "سردشت", "شاهین دژ", "اشنویه", "قره ضیاءالدین", "سیه چشمه"]
+  },
+  {
+    family: "یزد",
+    aliases: ["یزد", "استان یزد"],
+    regions: ["میبد", "اردکان", "مهریز", "بافق", "ابرکوه", "تفت", "اشکذر", "هرات", "مروست", "بهاباد"]
+  },
+  {
+    family: "کرمان",
+    aliases: ["کرمان", "استان کرمان"],
+    regions: ["رفسنجان", "سیرجان", "جیرفت", "بم", "زرند", "کهنوج", "شهر بابک", "بافت", "بردسیر", "عنبرآباد", "منوجان", "راور"]
+  },
+  {
+    family: "همدان",
+    aliases: ["همدان", "استان همدان"],
+    regions: ["ملایر", "نهاوند", "تویسرکان", "کبودرآهنگ", "بهار", "رزن", "فامنین", "لالجین", "مریانج", "قروه درجزین"]
+  },
+  {
+    family: "خرم آباد",
+    aliases: ["خرم آباد", "لرستان", "استان لرستان"],
+    regions: ["بروجرد", "دورود", "الیگودرز", "کوهدشت", "ازنا", "پلدختر", "الشتر", "سلسله", "نورآباد", "دلفان", "چگنی"]
+  },
+  {
+    family: "قزوین",
+    aliases: ["قزوین", "استان قزوین"],
+    regions: ["الوند", "البرز قزوین", "تاکستان", "بوئین زهرا", "آبیک", "محمدیه", "محمودآباد نمونه", "اقبالیه", "شریفیه", "ضیاءآباد"]
+  },
+  {
+    family: "زنجان",
+    aliases: ["زنجان", "استان زنجان"],
+    regions: ["ابهر", "خرمدره", "قیدار", "خدابنده", "طارم", "آب بر", "ماهنشان", "ایجرود", "زرین آباد", "سلطانیه"]
+  },
+  {
+    family: "سمنان",
+    aliases: ["سمنان", "استان سمنان"],
+    regions: ["شاهرود", "دامغان", "گرمسار", "مهدی شهر", "سنگسر", "سرخه", "آرادان", "میامی", "بسطام", "شهمیرزاد"]
+  },
+  {
+    family: "گرگان",
+    aliases: ["گرگان", "گلستان", "استان گلستان"],
+    regions: ["گنبد کاووس", "گنبد", "علی آباد کتول", "بندر ترکمن", "آق قلا", "کلاله", "آزادشهر", "کردکوی", "مینودشت", "گالیکش", "بندر گز", "رامیان", "مراوه تپه", "گمیشان"]
+  },
+  {
+    family: "بوشهر",
+    aliases: ["بوشهر", "استان بوشهر"],
+    regions: ["برازجان", "دشتستان", "گناوه", "بندر گناوه", "کنگان", "بندر کنگان", "عسلویه", "خورموج", "دشتی", "جم", "دیلم", "بندر دیلم", "اهرم", "تنگستان", "دیر", "بندر دیر"]
+  },
+  {
+    family: "بندر عباس",
+    aliases: ["بندر عباس", "بندرعباس", "هرمزگان", "استان هرمزگان"],
+    regions: ["قشم", "کیش", "میناب", "بندرلنگه", "لنگه", "رودان", "بستک", "حاجی آباد", "جاسک", "بندر خمیر", "پارسیان", "گاوبندی", "سیریک", "بشاگرد"]
+  },
+  {
+    family: "زاهدان",
+    aliases: ["زاهدان", "سیستان و بلوچستان", "سیستان", "بلوچستان"],
+    regions: ["زابل", "ایرانشهر", "چابهار", "بندر چابهار", "سراوان", "خاش", "نیک شهر", "کنارک", "راسک", "سرباز", "میرجاوه", "زهک", "هیرمند", "قصرقند"]
+  },
+  {
+    family: "سنندج",
+    aliases: ["سنندج", "کردستان", "استان کردستان"],
+    regions: ["سقز", "مریوان", "بانه", "قروه", "کامیاران", "بیجار", "دیواندره", "دهگلان", "سروآباد"]
+  },
+  {
+    family: "اردبیل",
+    aliases: ["اردبیل", "استان اردبیل"],
+    regions: ["پارس آباد", "مشگین شهر", "خلخال", "گرمی", "نمین", "بیله سوار", "کوثر", "گیوی", "سرعین", "نیر", "اصلاندوز"]
+  },
+  {
+    family: "شهرکرد",
+    aliases: ["شهرکرد", "چهارمحال و بختیاری", "چهارمحال"],
+    regions: ["بروجن", "فارسان", "لردگان", "فرخ شهر", "سامان", "بن", "کیار", "شلمزار", "کوهرنگ", "چلگرد", "اردل", "خانمیرزا"]
+  },
+  {
+    family: "ایلام",
+    aliases: ["ایلام", "استان ایلام"],
+    regions: ["دهلران", "ایوان", "آبدانان", "مهران", "دره شهر", "چرداول", "سرابله", "بدره", "ملکشاهی", "سیروان"]
+  },
+  {
+    family: "یاسوج",
+    aliases: ["یاسوج", "کهگیلویه و بویراحمد", "کهگیلویه"],
+    regions: ["دوگنبدان", "گچساران", "دهدشت", "لیکک", "بهمئی", "چرام", "لنده", "سی سخت", "دنا", "باشت", "مارگون"]
+  },
+  {
+    family: "بجنورد",
+    aliases: ["بجنورد", "خراسان شمالی"],
+    regions: ["شیروان", "اسفراین", "گرمه", "جاجرم", "آشخانه", "مانه و سملقان", "فاروج", "راز و جرگلان"]
+  },
+  {
+    family: "بیرجند",
+    aliases: ["بیرجند", "خراسان جنوبی"],
+    regions: ["قائنات", "قائن", "فردوس", "طبس", "نهبندان", "سرایان", "سربیشه", "بشرویه", "درمیان", "اسدیه", "خوسف", "زیرکوه"]
+  }
+];
+
+function getProvinceFamilies(rawText: string, citiesListFromDb: Array<{ name: string; regions: string[] }>): Set<string> {
+  const families = new Set<string>();
+  if (!rawText) return families;
+
+  const normalized = normalizeLocString(rawText);
+  const cleaned = cleanLocNoise(normalized);
+  const targets = [normalized, cleaned].filter(Boolean);
+
+  // 1. Check against dynamic citiesList from settings table
+  if (Array.isArray(citiesListFromDb) && citiesListFromDb.length > 0) {
+    for (const group of citiesListFromDb) {
+      const gName = normalizeLocString(group.name || "");
+      const gClean = cleanLocNoise(gName);
+      const gRegions = (group.regions || []).map(r => normalizeLocString(r));
+
+      for (const t of targets) {
+        const isNameMatch = (gName && (t.includes(gName) || gName.includes(t))) || (gClean && (t.includes(gClean) || gClean.includes(t)));
+        const isRegionMatch = gRegions.some(r => {
+          const rClean = cleanLocNoise(r);
+          return (r && (t.includes(r) || r.includes(t))) || (rClean && (t.includes(rClean) || rClean.includes(t)));
+        });
+
+        if (isNameMatch || isRegionMatch) {
+          families.add(gName || gClean);
+        }
+      }
+    }
+  }
+
+  // 2. Check against built-in PROVINCE_FAMILIES dictionary
+  for (const pf of PROVINCE_FAMILIES) {
+    const pfName = normalizeLocString(pf.family);
+    const pfAliases = (pf.aliases || []).map(a => normalizeLocString(a));
+    const pfRegions = (pf.regions || []).map(r => normalizeLocString(r));
+
+    for (const t of targets) {
+      const isFamilyMatch = t.includes(pfName) || pfName.includes(t);
+      const isAliasMatch = pfAliases.some(a => t.includes(a) || a.includes(t));
+      const isRegionMatch = pfRegions.some(r => {
+        const rClean = cleanLocNoise(r);
+        return t.includes(r) || r.includes(t) || (rClean && (t.includes(rClean) || rClean.includes(t)));
+      });
+
+      if (isFamilyMatch || isAliasMatch || isRegionMatch) {
+        families.add(pfName);
+        // Also map to any corresponding name in settings citiesList
+        if (Array.isArray(citiesListFromDb)) {
+          for (const group of citiesListFromDb) {
+            const gNorm = normalizeLocString(group.name || "");
+            if (gNorm === pfName || pfAliases.includes(gNorm) || pfRegions.includes(gNorm)) {
+              families.add(gNorm);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return families;
 }
 
 function isLocationMatching(loc1: string, loc2: string, citiesList: Array<{ name: string; regions: string[] }>): boolean {
@@ -1177,29 +1644,32 @@ function isLocationMatching(loc1: string, loc2: string, citiesList: Array<{ name
   const n2 = normalizeLocString(loc2);
   if (!n1 || !n2) return true;
 
-  // Direct match / substring match
-  if (n1 === n2 || n1.includes(n2) || n2.includes(n1)) return true;
+  const c1 = cleanLocNoise(n1);
+  const c2 = cleanLocNoise(n2);
 
-  // Check matching against citiesList from settings
-  if (Array.isArray(citiesList) && citiesList.length > 0) {
-    for (const group of citiesList) {
-      const gName = normalizeLocString(group.name || "");
-      const gRegions = (group.regions || []).map(r => normalizeLocString(r));
+  // Direct match or cleaned direct match
+  if (n1 === n2 || c1 === c2 || n1.includes(n2) || n2.includes(n1) || (c1 && c2 && (c1.includes(c2) || c2.includes(c1)))) {
+    return true;
+  }
 
-      const inGroup1 = (gName && (n1.includes(gName) || gName.includes(n1))) || gRegions.some(r => r && (n1.includes(r) || r.includes(n1)));
-      const inGroup2 = (gName && (n2.includes(gName) || gName.includes(n2))) || gRegions.some(r => r && (n2.includes(r) || r.includes(n2)));
+  // Extract provincial families for both locations
+  const fam1 = getProvinceFamilies(loc1, citiesList);
+  const fam2 = getProvinceFamilies(loc2, citiesList);
 
-      if (inGroup1 && inGroup2) {
+  if (fam1.size > 0 && fam2.size > 0) {
+    for (const f of fam1) {
+      if (fam2.has(f)) {
         return true;
       }
     }
   }
 
-  // Markazi province keywords matching (اراک، فرمهین، ساوه، خمین، محلات، شازند...)
-  const markaziKeywords = ["اراک", "مرکزی", "فرمهین", "ساوه", "خمین", "محلات", "شازند", "تفرش", "دلیجان", "زرندیه", "کمیجان", "آشتیان", "خنداب"];
-  const isMarkazi1 = markaziKeywords.some(k => n1.includes(k));
-  const isMarkazi2 = markaziKeywords.some(k => n2.includes(k));
-  if (isMarkazi1 && isMarkazi2) return true;
+  // Token overlap fallback for compound addresses
+  const tokens1 = c1.split(/\s+/).filter(w => w.length >= 3);
+  const tokens2 = c2.split(/\s+/).filter(w => w.length >= 3);
+  if (tokens1.some(t => tokens2.includes(t))) {
+    return true;
+  }
 
   return false;
 }
@@ -1207,21 +1677,32 @@ function isLocationMatching(loc1: string, loc2: string, citiesList: Array<{ name
 app.get(["/api/technicians", "/api/v1/technicians"], async (req, res) => {
   try {
     let list = await TechnicianRepository.findAll();
-    const queryCity = (req.query.city || req.query.location || req.query.region) as string;
+    const queryCity = (req.query.city || req.query.location || req.query.region || req.query.province) as string;
     const queryUserId = (req.query.user_id || req.query.userId) as string;
     const queryPhone = (req.query.phone || req.query.mobile) as string;
 
-    let targetCity = queryCity;
-    if (!targetCity && (queryUserId || queryPhone)) {
-      const user = queryUserId ? await UserRepository.findById(queryUserId).catch(() => null) : await UserRepository.findByPhone(queryPhone).catch(() => null);
-      if (user && user.city) {
-        targetCity = user.city;
+    let targetLocation = queryCity;
+    if (!targetLocation) {
+      if (queryUserId) {
+        const u = await UserRepository.findById(queryUserId).catch(() => null);
+        if (u && (u.city || u.address)) targetLocation = u.city || u.address;
+      } else if (queryPhone) {
+        const u = await UserRepository.findByPhone(queryPhone).catch(() => null);
+        if (u && (u.city || u.address)) targetLocation = u.city || u.address;
+      } else {
+        const sessionUser = await getCurrentUserAsync(req).catch(() => null);
+        if (sessionUser && (sessionUser.city || sessionUser.address)) {
+          targetLocation = sessionUser.city || sessionUser.address;
+        }
       }
     }
 
-    if (targetCity) {
+    if (targetLocation && String(targetLocation).trim()) {
       const settingsCities = await getCachedCitiesList();
-      list = list.filter(t => isLocationMatching(t.city || t.active_location || t.activeLocation || '', targetCity, settingsCities));
+      list = list.filter(t => {
+        const techLocCombined = `${t.city || ''} ${t.active_location || ''} ${t.activeLocation || ''} ${t.address || ''}`;
+        return isLocationMatching(techLocCombined, targetLocation, settingsCities);
+      });
     }
 
     return res.json({ status: "ok", technicians: list, data: list });
@@ -1341,8 +1822,25 @@ app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
 
 app.get("/api/settings", async (req, res) => {
   try {
+    const user = await getCurrentUserAsync(req).catch(() => null);
     const settings = await SettingsRepository.getSettings();
-    return res.json({ status: "ok", settings });
+
+    // If caller is admin, return complete settings
+    if (user && (user.role === "admin" || user.is_super_admin)) {
+      return res.json({ status: "ok", settings });
+    }
+
+    // For public/non-admin users, redact sensitive fields (SMS keys, admin passwords, secrets)
+    const publicSettings = { ...settings };
+    delete (publicSettings as any).smsSettings;
+    delete (publicSettings as any).smsApiKey;
+    delete (publicSettings as any).sms_api_key;
+    delete (publicSettings as any).adminPassword;
+    delete (publicSettings as any).admin_password;
+    delete (publicSettings as any).secret;
+    delete (publicSettings as any).jwtSecret;
+
+    return res.json({ status: "ok", settings: publicSettings });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }
@@ -1680,6 +2178,24 @@ app.get("/api/server-backups", requireAdmin, (req, res) => {
   }
 });
 
+// Secure endpoint for Admin to download backup files without making BACKUPS_DIR publicly accessible
+app.get("/api/server-backups/download/:filename", requireAdmin, (req, res) => {
+  try {
+    const rawFilename = req.params.filename;
+    // Sanitize filename to prevent directory traversal
+    const safeFilename = path.basename(rawFilename);
+    const filePath = path.join(BACKUPS_DIR, safeFilename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ status: "error", message: "فایل پشتیبان مورد نظر یافت نشد." });
+    }
+
+    res.download(filePath, safeFilename);
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
 app.post("/api/server-backups/create", requireAdmin, async (req, res) => {
   try {
     if (!fs.existsSync(BACKUPS_DIR)) {
@@ -1797,6 +2313,69 @@ app.post("/api/server-backups/import-formatted-json", requireAdmin, async (req, 
       }
     }
     return res.json({ status: "ok", message: "اطلاعات JSON با موفقیت بروزرسانی شد" });
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+// Explicit endpoint for /api/admin/get-database: strictly admin-protected and strips sensitive passwords
+app.get(["/api/admin/get-database", "/api/admin/database-dump"], requireAdmin, async (req, res) => {
+  try {
+    const rawUsers = await UserRepository.findAll();
+    const safeUsers = rawUsers.map((u: any) => {
+      const userCopy = { ...u };
+      delete userCopy.password_hash;
+      delete userCopy.password;
+      return userCopy;
+    });
+
+    const dump = {
+      timestamp: new Date().toISOString(),
+      users: safeUsers,
+      technicians: await TechnicianRepository.findAll(),
+      errorCodes: await ErrorCodeRepository.findAll(),
+      problems: await ProblemRepository.findAll(),
+      spareParts: await SparePartRepository.findAll(),
+      orders: await OrderRepository.findAll(),
+      partOrders: await PartOrderRepository.findAll(),
+      subscriptions: await SubscriptionRepository.findAll(),
+      payments: await PaymentRepository.findAll(),
+      tickets: await TicketRepository.findAll(),
+      settings: await SettingsRepository.getSettings()
+    };
+    return res.json({ status: "ok", database: dump, data: dump });
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+// Explicit endpoint for /api/save-database: strictly admin-protected
+app.post("/api/save-database", requireAdmin, async (req, res) => {
+  try {
+    const dump = req.body || {};
+    if (Array.isArray(dump.errorCodes)) {
+      for (const item of dump.errorCodes) {
+        if (!item.id) continue;
+        const existing = await ErrorCodeRepository.findById(item.id);
+        if (existing) {
+          await ErrorCodeRepository.update(item.id, item).catch(() => {});
+        } else {
+          await ErrorCodeRepository.create(item).catch(() => {});
+        }
+      }
+    }
+    if (Array.isArray(dump.problems)) {
+      for (const item of dump.problems) {
+        if (!item.id) continue;
+        const existing = await ProblemRepository.findById(item.id);
+        if (existing) {
+          await ProblemRepository.update(item.id, item).catch(() => {});
+        } else {
+          await ProblemRepository.create(item).catch(() => {});
+        }
+      }
+    }
+    return res.json({ status: "ok", message: "پایگاه داده با موفقیت ذخیره گردید." });
   } catch (err: any) {
     return res.status(500).json({ status: "error", error: err.message });
   }

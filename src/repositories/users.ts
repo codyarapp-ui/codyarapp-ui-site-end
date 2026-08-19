@@ -2,7 +2,7 @@ import { getDbPool } from "../db/db";
 
 function formatUserRow(row: any): any {
   if (!row) return null;
-  return {
+  const user = {
     ...row,
     id: row.id,
     phone: row.phone || "",
@@ -20,6 +20,9 @@ function formatUserRow(row: any): any {
     wallet_balance: Number(row.wallet_balance || row.walletBalance || 0),
     status: row.status || "active"
   };
+  delete user.password_hash;
+  delete user.password;
+  return user;
 }
 
 export const UserRepository = {

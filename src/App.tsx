@@ -121,12 +121,25 @@ export const cleanCommonProblemsList = (list: any): CommonProblem[] => {
   if (!Array.isArray(list)) return [];
   const seen = new Set<string>();
   const cleaned: CommonProblem[] = [];
-  for (const item of list) {
-    if (item && typeof item === 'object' && item.id) {
-      const idStr = String(item.id).trim();
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    if (item && typeof item === 'object') {
+      const rawId = item.id ?? item.problem_id ?? item.code ?? `prob_${i + 1}`;
+      const idStr = String(rawId).trim();
       if (!seen.has(idStr)) {
         seen.add(idStr);
-        cleaned.push(item as CommonProblem);
+        cleaned.push({
+          ...item,
+          id: idStr,
+          title: item.title || item.name || item.problem_title || '',
+          category: item.category || item.device_type || 'عمومی',
+          brand: item.brand || 'عمومی',
+          model: item.model || 'عمومی',
+          symptoms: Array.isArray(item.symptoms) ? item.symptoms : (typeof item.symptoms === 'string' && item.symptoms ? [item.symptoms] : []),
+          causes: Array.isArray(item.causes) ? item.causes : (typeof item.causes === 'string' && item.causes ? [item.causes] : []),
+          solutions: Array.isArray(item.solutions) ? item.solutions : (Array.isArray(item.steps) ? item.steps : (typeof item.solutions === 'string' && item.solutions ? [item.solutions] : [])),
+          steps: Array.isArray(item.steps) ? item.steps : (Array.isArray(item.solutions) ? item.solutions : [])
+        } as CommonProblem);
       }
     }
   }
@@ -345,7 +358,14 @@ export default function App() {
     }
   };
 
-  const [commonProblems, _setCommonProblems] = useState<CommonProblem[]>([]);
+  const [commonProblems, _setCommonProblems] = useState<CommonProblem[]>(() => {
+    try {
+      const saved = localStorage.getItem('ir_common_problems');
+      return saved ? cleanCommonProblemsList(JSON.parse(saved)) : [];
+    } catch {
+      return [];
+    }
+  });
   const setCommonProblems = (val: CommonProblem[] | ((prev: CommonProblem[]) => CommonProblem[])) => {
     if (typeof val === 'function') {
       _setCommonProblems(prev => cleanCommonProblemsList(val(prev)));
@@ -1211,8 +1231,8 @@ const reconcileSubscriptionsWithPayments = (subs: any[], payments: any[]) => {
 
       if (problemsRes.status === 'fulfilled' && problemsRes.value.ok) {
         const json = await problemsRes.value.json();
-        const items = json.commonProblems || json.problems;
-        if (items) {
+        const items = json.commonProblems || json.problems || json.data || json.results;
+        if (items && Array.isArray(items)) {
           setCommonProblems(items);
           localStorage.setItem('ir_common_problems', JSON.stringify(items));
         }

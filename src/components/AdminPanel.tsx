@@ -6691,6 +6691,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <span className="text-[10px] text-slate-500 font-mono block">فایل: {bk.fileName} | حجم: {bk.dataSizeKB} KB</span>
                     </div>
                     <div className="flex items-center gap-2">
+                      <a
+                        href={`/api/server-backups/download/${encodeURIComponent(bk.fileName)}`}
+                        download
+                        className="bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-black px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs flex items-center gap-1.5"
+                        title="دانلود این فایل بکاپ"
+                      >
+                        <Upload className="w-3.5 h-3.5 rotate-180" />
+                        <span>دانلود</span>
+                      </a>
+
                       <button
                         type="button"
                         onClick={() => {

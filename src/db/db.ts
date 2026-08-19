@@ -108,6 +108,8 @@ export async function ensureDatabaseSchema(): Promise<void> {
     await safeAddColumn('users', 'is_premium TINYINT(1) DEFAULT 0');
     await safeAddColumn('users', 'subscription_plan VARCHAR(100) DEFAULT ""');
     await safeAddColumn('users', 'subscription_expire_date VARCHAR(100) DEFAULT ""');
+    await safeAddColumn('users', 'password VARCHAR(255) DEFAULT ""');
+    await safeAddColumn('users', 'user_name VARCHAR(100) DEFAULT ""');
 
     await safeAddColumn('error_codes', 'is_approved TINYINT(1) DEFAULT 1');
     await safeAddColumn('error_codes', 'submitted_by VARCHAR(100) DEFAULT ""');
@@ -120,6 +122,7 @@ export async function ensureDatabaseSchema(): Promise<void> {
     await safeAddColumn('technicians', 'is_verified TINYINT(1) DEFAULT 1');
     await safeAddColumn('technicians', 'documents JSON NULL');
     await safeAddColumn('technicians', 'active_location VARCHAR(100) DEFAULT "تهران"');
+    await safeAddColumn('technicians', 'password VARCHAR(255) DEFAULT ""');
 
     await safeAddColumn('spare_parts', 'part_number VARCHAR(100) DEFAULT ""');
     await safeAddColumn('spare_parts', 'brand VARCHAR(100) DEFAULT ""');
@@ -134,9 +137,15 @@ export async function ensureDatabaseSchema(): Promise<void> {
 
     await safeAddColumn('subscriptions', 'plan_id VARCHAR(100) DEFAULT ""');
     await safeAddColumn('subscriptions', 'plan_name VARCHAR(100) DEFAULT ""');
+    await safeAddColumn('subscriptions', 'user_name VARCHAR(100) DEFAULT ""');
+    await safeAddColumn('subscriptions', 'user_phone VARCHAR(20) DEFAULT ""');
+    await safeAddColumn('subscriptions', 'phone VARCHAR(20) DEFAULT ""');
 
     await safeAddColumn('payments', 'ref_code VARCHAR(100) DEFAULT ""');
     await safeAddColumn('payments', 'card_number VARCHAR(50) DEFAULT ""');
+    await safeAddColumn('payments', 'gateway VARCHAR(100) DEFAULT "card_to_card"');
+    await safeAddColumn('payments', 'user_name VARCHAR(100) DEFAULT ""');
+    await safeAddColumn('payments', 'user_phone VARCHAR(20) DEFAULT ""');
 
     await safeAddColumn('part_orders', 'buyer_name VARCHAR(100) DEFAULT ""');
     await safeAddColumn('part_orders', 'buyer_phone VARCHAR(20) DEFAULT ""');
@@ -1047,6 +1056,8 @@ export async function getCurrentUserAsync(req: express.Request): Promise<any | n
       } catch (e) {
         console.warn("[getCurrentUserAsync] Sub/Pay/Orders fetch error:", e);
       }
+      delete u.password_hash;
+      delete u.password;
       return setAndReturn(u);
     }
 

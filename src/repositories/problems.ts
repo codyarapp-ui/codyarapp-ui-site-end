@@ -24,9 +24,14 @@ function formatProblemRow(row: any): any {
 
 export const ProblemRepository = {
   async findAll(): Promise<any[]> {
-    const pool = getDbPool();
-    const [rows]: any = await pool.query("SELECT * FROM problems ORDER BY created_at DESC");
-    return (rows || []).map(formatProblemRow);
+    try {
+      const pool = getDbPool();
+      const [rows]: any = await pool.query("SELECT * FROM problems");
+      return (rows || []).map(formatProblemRow);
+    } catch (err) {
+      console.error("ProblemRepository.findAll error:", err);
+      return [];
+    }
   },
 
   async findById(id: string): Promise<any | null> {
